@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import scanpy as sc
 import os
+import sys
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 
@@ -36,7 +37,7 @@ for dataset in ['6_Mouse_Embryo', '4_Human_Lymph_Node', '5_Mouse_Brain']:
     LayerName = list(data_omics1.obs['cluster'])
     adata_omics1 = preprocess(data_omics1, modality = 'rna') # 模型输入：ndarray格式
 
-    data_omics1 = anndata.AnnData(pca(data_omics1, n_comps=30 if dataset == '4_Human_Lymph_Node' else 50),
+    data_omics1 = ad.AnnData(pca(data_omics1, n_comps=30 if dataset == '4_Human_Lymph_Node' else 50),
                                   obs=data_omics1.obs, obsm=data_omics1.obsm)
     sc.pp.normalize_total(data_omics1, target_sum=1e4)  # 总量归一化
     sc.pp.log1p(data_omics1)  # 对数转换
@@ -55,7 +56,7 @@ for dataset in ['6_Mouse_Embryo', '4_Human_Lymph_Node', '5_Mouse_Brain']:
 
     elif dataset == '5_Mouse_Brain':
         data_omics2 = sc.read_h5ad('../Dataset/' + dataset + '/adata_peaks_normalized.h5ad')
-        data_omics2 = anndata.AnnData(data_omics2.obsm['X_lsi'], obs=data_omics2.obs, obsm=data_omics2.obsm)
+        data_omics2 = ad.AnnData(data_omics2.obsm['X_lsi'], obs=data_omics2.obs, obsm=data_omics2.obsm)
         adata_omics2 = preprocess(data_omics2, modality = 'atac')
         n_cluster = 15
 
@@ -64,7 +65,7 @@ for dataset in ['6_Mouse_Embryo', '4_Human_Lymph_Node', '5_Mouse_Brain']:
         adata_omics2 = preprocess(data_omics2, modality = 'atac')
         if 'X_lsi' not in data_omics2.obsm.keys():
             lsi(data_omics2, use_highly_variable=False, n_components=50)
-        data_omics2 = anndata.AnnData(data_omics2.obsm['X_lsi'], obs=data_omics2.obs, obsm=data_omics2.obsm)
+        data_omics2 = ad.AnnData(data_omics2.obsm['X_lsi'], obs=data_omics2.obs, obsm=data_omics2.obsm)
         data_omics2.obsm['X_lsi'] = data_omics2.X
         n_cluster = 14
     else:
@@ -124,7 +125,7 @@ for dataset in ['6_Mouse_Embryo', '4_Human_Lymph_Node', '5_Mouse_Brain']:
 
         results_row = {
             'Dataset': dataset,
-            'method': 'miso'
+            'method': 'miso',
             'ARI': ari,
             'MI': mi,
             'NMI': nmi,
