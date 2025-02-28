@@ -55,31 +55,33 @@ for i in range(n):
     adata_RNA = ad.AnnData(pca(data_RNA, n_comps=50), obs=data_RNA.obs, obsm=data_RNA.obsm)
     adata_RNA.obsm['X_pca'] = adata_RNA.X
 
-    adata_ADT = sc.read_h5ad("adata_ADT.h5ad")
-    adt = preprocess(adata_ADT, modality='protein')  # 模型输入：ndarray格式
-    sc.pp.normalize_total(adata_ADT, target_sum=1e4)  # 总量归一化
-    sc.pp.log1p(adata_ADT)  # 对数转换
-    sc.pp.scale(adata_ADT)  # 标准化
-    adata_ADT.obsm['X_pca'] = adata_ADT.X
+    adata_ATAC = sc.read_h5ad("adata_peaks.h5ad")
+    atac = preprocess(adata_ATAC, modality='atac')  # 模型输入：ndarray格式
+    if 'X_lsi' not in adata_ATAC.obsm.keys():
+        lsi(adata_ATAC, use_highly_variable=False, n_components=50)
+    adata_ATAC = anndata.AnnData(adata_ATAC.obsm['X_lsi'], obs=adata_ATAC.obs, obsm=adata_ATAC.obsm)
+    adata_ATAC.obsm['X_lsi'] = adata_ATAC.X
+
+    n_cluster = 14
 
     if isinstance(LayerName[0], bytes):
         LayerName = [item.decode('utf-8') for item in LayerName]
     # if using a subset of modality-specific terms, the "ind_views" parameter should be a list with values entries to the indices of the modalities to be included, e.g.,  ind_views=[0,2] if including RNA and image features
     # if using a subset of interaction terms, the "combs" parameter should be a list of tuples with entries to the indices of the modalities for each interaction, e.g. combs = [(0,1),(0,2)] if including the RNA-protein and RNA-image interaction terms
     # model = Miso([rna,protein,image_emb],ind_views='all',combs='all',sparse=False,device=device)
-
-    model = Miso([rna, adt], ind_views=[0, 1], combs=[(0, 1)], sparse=False, device=device)
+    # 使用 RNA 和 ATAC数据进行训练，只考虑 RNA 和 ATAC之间的交互
+    model = Miso([rna, atac], ind_views=[0, 1], combs=[(0, 1)], sparse=False, device=device)
 
     model.train()
     np.save('emb.npy', model.emb)
 
     # 获取聚类结果
-    clusters = model.cluster(n_clusters=10)
-    adata_ADT.obs['clusters'] = clusters
+    clusters = model.cluster(n_clusters=14)
+    adata_ATAC.obs['clusters'] = clusters
     cluster = LayerName
     cluster_learned = clusters
-    adata_RNA.obsm['emb'] = model.emb  # 存储聚类标签,anndata格式
-    adata_ADT.obsm['emb'] = model.emb
+    adata_RNA.obsm['emb'] = model.emb
+    adata_ATAC.obsm['emb'] = model.emb
     ari = adjusted_rand_score(cluster, cluster_learned)
     mi = mutual_info_score(cluster, cluster_learned)
     nmi = normalized_mutual_info_score(cluster, cluster_learned)
@@ -114,5 +116,5 @@ for i in range(n):
 
 # 添加索引
 all_results.index = [str(i + 1) for i in range(n)]
-print("Results saved to 'miso_evaluation_results.csv'")
-all_results.to_csv('miso_evaluation_results.csv', index_label="evaluation")
+print("Results saved to 'miso_evaluation_results1.csv'")
+all_results.to_csv('miso_evaluation_results1.csv', index_label="evaluation")
