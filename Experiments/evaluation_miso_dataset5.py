@@ -22,7 +22,7 @@ from miso.utils import compute_jaccard, pca
 # 结果列表
 results = []
 
-columns = ['ARI', 'MI', 'NMI', 'AMI', 'HOM', 'VME', 'Average', 'jaccard_RNA', 'jaccard_ADT', 'moranI']
+columns = ['ARI', 'MI', 'NMI', 'AMI', 'HOM', 'VME', 'Average', 'jaccard_RNA', 'jaccard_ATAC', 'moranI']
 all_results = pd.DataFrame(columns=columns)
 
 n = 10
@@ -55,13 +55,13 @@ for i in range(n):
     adata_RNA = ad.AnnData(pca(data_RNA, n_comps=50), obs=data_RNA.obs, obsm=data_RNA.obsm)
     adata_RNA.obsm['X_pca'] = adata_RNA.X
 
-    adata_ADT = sc.read_h5ad("adata_ADT.h5ad")
-    adt = preprocess(adata_ADT, modality='protein')  # 模型输入：ndarray格式
-    sc.pp.normalize_total(adata_ADT, target_sum=1e4)  # 总量归一化
-    sc.pp.log1p(adata_ADT)  # 对数转换
-    sc.pp.scale(adata_ADT)  # 标准化
-    # adata_ADT = ad.AnnData(pca(data_ADT, n_comps=50), obs=data_ADT.obs, obsm=data_ADT.obsm)
-    adata_ADT.obsm['X_pca'] = adata_ADT.X
+    adata_ATAC = sc.read_h5ad("adata_peaks_normalized.h5ad")
+    ATAC = ad.AnnData(adata_ATAC.obsm['X_lsi'], obs=adata_ATAC.obs, obsm=adata_ATAC.obsm)
+    if scipy.sparse.issparse(ATAC.X):
+        ATAC = ATAC.X.A
+    else:
+        ATAC = ATAC.X   # ATAC的数据原模型preprocess跑不通,转换为ndarray
+
 
     if isinstance(LayerName[0], bytes):
         LayerName = [item.decode('utf-8') for item in LayerName]
@@ -69,18 +69,18 @@ for i in range(n):
     # if using a subset of interaction terms, the "combs" parameter should be a list of tuples with entries to the indices of the modalities for each interaction, e.g. combs = [(0,1),(0,2)] if including the RNA-protein and RNA-image interaction terms
     # model = Miso([rna,protein,image_emb],ind_views='all',combs='all',sparse=False,device=device)
     # 使用 RNA 和 ATAC数据进行训练，只考虑 RNA 和 ATAC之间的交互
-    model = Miso([rna, adt], ind_views=[0, 1], combs=[(0, 1)], sparse=False, device=device)
+    model = Miso([rna, ATAC], ind_views=[0, 1], combs=[(0, 1)], sparse=False, device=device)
 
     model.train()
     np.save('emb.npy', model.emb)
 
     # 获取聚类结果
     clusters = model.cluster(n_clusters=15)
-    adata_ADT.obs['clusters'] = clusters
+    adata_ATAC.obs['clusters'] = clusters
     cluster = LayerName
     cluster_learned = clusters
     adata_RNA.obsm['emb'] = model.emb  # 存储聚类标签,anndata格式
-    adata_ADT.obsm['emb'] = model.emb
+    adata_ATAC.obsm['emb'] = model.emb
     ari = adjusted_rand_score(cluster, cluster_learned)
     mi = mutual_info_score(cluster, cluster_learned)
     nmi = normalized_mutual_info_score(cluster, cluster_learned)
@@ -91,8 +91,8 @@ for i in range(n):
 
     # 计算Jaccard
     jaccard_RNA = compute_jaccard(adata_RNA, 'emb')
-    jaccard_ATAC = compute_jaccard(adata_ADT, 'emb')
-    moranI = compute_moranI(adata_ADT, 'clusters')
+    jaccard_ATAC = compute_jaccard(adata_ATAC, 'emb')
+    moranI = compute_moranI(adata_ATAC,'clusters')
 
     results_row = {
         'ARI': ari,
@@ -103,7 +103,7 @@ for i in range(n):
         'VME': vme,
         'Average': average,
         'jaccard_RNA': jaccard_RNA,
-        'jaccard_ADT': jaccard_ATAC,
+        'jaccard_ATAC': jaccard_ATAC,
         'moranI': moranI
     }
     # 打印每次的结果
