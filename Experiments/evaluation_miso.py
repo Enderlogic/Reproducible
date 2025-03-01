@@ -37,11 +37,13 @@ for dataset in ['6_Mouse_Embryo', '4_Human_Lymph_Node', '5_Mouse_Brain']:
     LayerName = list(data_omics1.obs['cluster'])
     adata_omics1 = preprocess(data_omics1, modality = 'rna') # 模型输入：ndarray格式
 
-    data_omics1 = ad.AnnData(pca(data_omics1, n_comps=30 if dataset == '4_Human_Lymph_Node' else 50),
-                                  obs=data_omics1.obs, obsm=data_omics1.obsm)
+    # data_omics1 = ad.AnnData(pca(data_omics1, n_comps=30 if dataset == '4_Human_Lymph_Node' else 50),
+    #                               obs=data_omics1.obs, obsm=data_omics1.obsm)
     sc.pp.normalize_total(data_omics1, target_sum=1e4)  # 总量归一化
     sc.pp.log1p(data_omics1)  # 对数转换
     sc.pp.scale(data_omics1)
+    data_omics1 = ad.AnnData(pca(data_omics1, n_comps=30 if dataset == '4_Human_Lymph_Node' else 50),
+                                  obs=data_omics1.obs, obsm=data_omics1.obsm)
     data_omics1 = ad.AnnData(pca(data_omics1, n_comps=50), obs=data_omics1.obs, obsm=data_omics1.obsm)
     data_omics1.obsm['X_pca'] = data_omics1.X
 
@@ -108,8 +110,8 @@ for dataset in ['6_Mouse_Embryo', '4_Human_Lymph_Node', '5_Mouse_Brain']:
         data_omics2.obs['clusters'] = clusters
         cluster = LayerName
         cluster_learned = clusters
-        adata_omics1.obsm['emb'] = model.emb  # 存储聚类标签,anndata格式
-        adata_omics2.obsm['emb'] = model.emb
+        data_omics1.obsm['emb'] = model.emb  # 存储聚类标签,anndata格式
+        data_omics2.obsm['emb'] = model.emb
         ari = adjusted_rand_score(cluster, cluster_learned)
         mi = mutual_info_score(cluster, cluster_learned)
         nmi = normalized_mutual_info_score(cluster, cluster_learned)

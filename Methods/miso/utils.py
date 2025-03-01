@@ -129,9 +129,14 @@ def set_random_seed(seed=100):
 
 def compute_jaccard(adata, key, k=50):
     sc.pp.neighbors(adata, use_rep=key, key_added=key, n_neighbors=k)
-    sc.pp.neighbors(adata, use_rep='X_pca', key_added='X_pca', n_neighbors=k)
-    jaccard = ((adata.obsp[key + '_distances'].toarray() * adata.obsp['X_pca_distances'].toarray() > 0).sum(1) / (
-            adata.obsp[key + '_distances'].toarray() + adata.obsp['X_pca_distances'].toarray() > 0).sum(1)).mean()
+    if 'X_pca' in adata.obsm:
+        sc.pp.neighbors(adata, use_rep='X_pca', key_added='X', n_neighbors=k)
+    elif 'X_lsi' in adata.obsm:
+        sc.pp.neighbors(adata, use_rep='X_lsi', key_added='X', n_neighbors=k)
+    else:
+        sc.pp.neighbors(adata, use_rep='X', key_added='X', n_neighbors=k)
+    jaccard = ((adata.obsp[key + '_distances'].toarray() * adata.obsp['X_distances'].toarray() > 0).sum(1) / (
+            adata.obsp[key + '_distances'].toarray() + adata.obsp['X_distances'].toarray() > 0).sum(1)).mean()
     return jaccard
 
 def compute_moranI(adata, key):
