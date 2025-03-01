@@ -29,27 +29,25 @@ from Methods.SpatialGlue.preprocess import lsi
 # 结果列表
 results = []
 
-columns = ['Dataset', 'method', 'ARI', 'MI', 'NMI', 'AMI', 'HOM', 'VME', 'Average', 'jaccard_RNA', 'jaccard_ADT', 'moranI']
+columns = ['Dataset', 'method', 'ARI', 'MI', 'NMI', 'AMI', 'HOM', 'VME', 'Average', 'jaccard_RNA', 'jaccard_ADT',
+           'moranI']
 all_results = pd.DataFrame(columns=columns)
 
 for dataset in ['6_Mouse_Embryo', '4_Human_Lymph_Node', '5_Mouse_Brain']:
     data_omics1 = sc.read_h5ad('../Dataset/' + dataset + '/adata_RNA.h5ad')
     LayerName = list(data_omics1.obs['cluster'])
-    adata_omics1 = preprocess(data_omics1, modality = 'rna') # 模型输入：ndarray格式
+    adata_omics1 = preprocess(data_omics1, modality='rna')  # 模型输入：ndarray格式，降维前
 
-    # data_omics1 = ad.AnnData(pca(data_omics1, n_comps=30 if dataset == '4_Human_Lymph_Node' else 50),
-    #                               obs=data_omics1.obs, obsm=data_omics1.obsm)
-    sc.pp.normalize_total(data_omics1, target_sum=1e4)  # 总量归一化
-    sc.pp.log1p(data_omics1)  # 对数转换
+    sc.pp.normalize_total(data_omics1, target_sum=1e4)
+    sc.pp.log1p(data_omics1)
     sc.pp.scale(data_omics1)
     data_omics1 = ad.AnnData(pca(data_omics1, n_comps=30 if dataset == '4_Human_Lymph_Node' else 50),
-                                  obs=data_omics1.obs, obsm=data_omics1.obsm)
-    data_omics1 = ad.AnnData(pca(data_omics1, n_comps=50), obs=data_omics1.obs, obsm=data_omics1.obsm)
+                             obs=data_omics1.obs, obsm=data_omics1.obsm)  # 降维求指标
     data_omics1.obsm['X_pca'] = data_omics1.X
 
     if dataset == '4_Human_Lymph_Node':
         data_omics2 = sc.read_h5ad('../Dataset/' + dataset + '/adata_ADT.h5ad')
-        adata_omics2 = preprocess(data_omics2, modality = 'protein')
+        adata_omics2 = preprocess(data_omics2, modality='protein')
         sc.pp.normalize_total(data_omics2, target_sum=1e4)
         sc.pp.log1p(data_omics2)
         sc.pp.scale(data_omics2)
@@ -59,12 +57,12 @@ for dataset in ['6_Mouse_Embryo', '4_Human_Lymph_Node', '5_Mouse_Brain']:
     elif dataset == '5_Mouse_Brain':
         data_omics2 = sc.read_h5ad('../Dataset/' + dataset + '/adata_peaks_normalized.h5ad')
         data_omics2 = ad.AnnData(data_omics2.obsm['X_lsi'], obs=data_omics2.obs, obsm=data_omics2.obsm)
-        adata_omics2 = preprocess(data_omics2, modality = 'atac')
+        adata_omics2 = preprocess(data_omics2, modality='atac')
         n_cluster = 15
 
     elif dataset == '6_Mouse_Embryo':
         data_omics2 = sc.read_h5ad('../Dataset/' + dataset + '/adata_peaks.h5ad')
-        adata_omics2 = preprocess(data_omics2, modality = 'atac')
+        adata_omics2 = preprocess(data_omics2, modality='atac')
         if 'X_lsi' not in data_omics2.obsm.keys():
             lsi(data_omics2, use_highly_variable=False, n_components=50)
         data_omics2 = ad.AnnData(data_omics2.obsm['X_lsi'], obs=data_omics2.obs, obsm=data_omics2.obsm)
@@ -139,11 +137,10 @@ for dataset in ['6_Mouse_Embryo', '4_Human_Lymph_Node', '5_Mouse_Brain']:
             'jaccard_ADT': jaccard_ATAC,
             'moranI': moranI
         }
-        # 打印每次的结果
+
         for key, value in results_row.items():
             print(f"{key}: {value}")
 
-        # 添加这一行到结果 DataFrame
         all_results = all_results.append(results_row, ignore_index=True)
 
 print("Results saved to 'miso_evaluation_results.csv'")
