@@ -162,3 +162,24 @@ def pca(adata, use_reps=None, n_comps=10):
             feat_pca = pca.fit_transform(adata.X)
 
     return feat_pca
+
+def clr_normalize_each_cell(adata, inplace=True):
+    """Normalize count vector for each cell, i.e. for each row of .X"""
+
+    import numpy as np
+    import scipy
+
+    def seurat_clr(x):
+        # TODO: support sparseness
+        s = np.sum(np.log1p(x[x > 0]))
+        exp = np.exp(s / len(x))
+        return np.log1p(x / exp)
+
+    if not inplace:
+        adata = adata.copy()
+
+    # apply to dense or sparse matrix, along axis. returns dense matrix
+    adata.X = np.apply_along_axis(
+        seurat_clr, 1, (adata.X.toarray() if scipy.sparse.issparse(adata.X) else np.array(adata.X))
+    )
+    return adata
