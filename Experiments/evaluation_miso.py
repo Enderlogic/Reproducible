@@ -33,7 +33,7 @@ columns = ['Dataset', 'method', 'ARI', 'MI', 'NMI', 'AMI', 'HOM', 'VME', 'Averag
            'moranI']
 all_results = pd.DataFrame(columns=columns)
 
-for dataset in ['6_Mouse_Embryo', '4_Human_Lymph_Node', '5_Mouse_Brain']:
+for dataset in [ '4_Human_Lymph_Node', '5_Mouse_Brain', '6_Mouse_Embryo']:
     data_omics1 = sc.read_h5ad('../Dataset/' + dataset + '/adata_RNA.h5ad')
     LayerName = list(data_omics1.obs['cluster'])
     adata_omics1 = preprocess(data_omics1, modality='rna')  # 模型输入：ndarray格式，降维前
@@ -56,7 +56,7 @@ for dataset in ['6_Mouse_Embryo', '4_Human_Lymph_Node', '5_Mouse_Brain']:
 
     elif dataset == '5_Mouse_Brain':
         data_omics2 = sc.read_h5ad('../Dataset/' + dataset + '/adata_peaks_normalized.h5ad')
-        data_omics2 = ad.AnnData(data_omics2.obsm['X_lsi'], obs=data_omics2.obs, obsm=data_omics2.obsm)
+        # data_omics2 = ad.AnnData(data_omics2.obsm['X_lsi'], obs=data_omics2.obs, obsm=data_omics2.obsm)
         adata_omics2 = preprocess(data_omics2, modality='atac')
         n_cluster = 15
 
