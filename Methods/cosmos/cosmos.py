@@ -47,8 +47,8 @@ import pandas as pd
 from scipy.spatial import distance_matrix
 from torch_geometric.nn import GCNConv
 from sklearn.neighbors import kneighbors_graph
-from modulesWNN import DeepGraphInfomaxWNN
-from pyWNN import pyWNN
+from Methods.cosmos.modulesWNN import DeepGraphInfomaxWNN
+from Methods.cosmos.pyWNN import pyWNN
 
 
 def sparse_mx_to_torch_edge_list(sparse_mx):
