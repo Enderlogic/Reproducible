@@ -17,7 +17,7 @@ from sklearn.metrics import pairwise_distances
 import matplotlib.pyplot as plt
 import anndata
 import random
-from Methods.SpaMV.utils import pca, clr_normalize_each_cell, ST_preprocess
+from Methods.SpaMV.utils import pca, ST_preprocess
 from Methods.SpaMV.metrics import compute_moranI, compute_jaccard, compute_supervised_scores
 
 # torch.manual_seed(42)
@@ -47,9 +47,6 @@ def refine(sample_id, pred, dis, shape="square"):
         if (i + 1) % 1000 == 0:
             print("Processed", i + 1, "lines")
     return np.array(refined_pred)
-result = pandas.DataFrame(
-    columns=['Dataset', 'method', 'ari', 'mi', 'nmi', 'ami', 'hom', 'vme', 'average', 'jaccard 1', 'jaccard 2',
-             'moran I'])
 if __name__ == "__main__":
 
     # setting the hyper parameters
@@ -58,7 +55,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description='Spatial dependency-aware variational autoencoder for spatial multi-omics data',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    # parser.add_argument('--data_file', default='./Spatial_CITE_seq_human_tonsil/GSM6578062_human_tonsil_SVG.h5')
     parser.add_argument('--select_genes', default=0, type=int)
     parser.add_argument('--select_proteins', default=0, type=int)
     parser.add_argument('--batch_size', default="auto")
@@ -101,8 +97,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     result = pandas.DataFrame(
-    columns=['Dataset', 'method', 'ari', 'mi', 'nmi', 'ami', 'hom', 'vme', 'average', 'jaccard 1', 'jaccard 2',
-             'moran I'])
+    columns=['Dataset', 'method', 'ari', 'ari_refined', 'mi', 'mi_refined', 
+             'nmi', 'nmi_refined', 'ami', 'ami_refined' , 'hom', 'hom_refined', 'vme', 'vme_refined', 
+             'average','average_refined', 'jaccard 1', 'jaccard 2', 'moran I', 'moran I_refined'])
     for dataset in ['4_Human_Lymph_Node']:
         data_omics1 = sc.read_h5ad('Dataset/' + dataset + '/adata_RNA.h5ad')
         data_omics1 = ST_preprocess(data_omics1)
@@ -170,9 +167,6 @@ if __name__ == "__main__":
                                       size_factors=False,
                                       normalize_input=False,
                                       logtrans_input=True)
-    
-
-    
 
     for i in range(10):
         seed = random.randint(1, 10000)
@@ -213,6 +207,7 @@ if __name__ == "__main__":
         final_latent_file = 'Results/final_latent'+ '_' + str(i) + '.txt'
         final_latent = model.batching_latent_samples(X=loc_adata, gene_Y=data_omics1_new.X, protein_Y=data_omics2_new.X, batch_size=args.batch_size)
         np.savetxt(final_latent_file, final_latent, delimiter=",")
+    
 
         # gene_denoised_counts, protein_denoised_counts, protein_sigmoid = model.batching_denoise_counts(X=loc_adata,
         #                                                                                                gene_Y=adata_omics1_new.X,
@@ -231,17 +226,20 @@ if __name__ == "__main__":
         dis = pairwise_distances(pos, metric="euclidean", n_jobs=-1).astype(np.double)
         pred_refined = refine(np.arange(pred.shape[0]), pred, dis, shape="hexagon")
         data_omics1_new.obs['spaMultiVAE'] = pred
+        data_omics1_new.obs['spaMultiVAE_refined'] = pred_refined
         data_omics1_new.obsm['spaMultiVAE'] = final_latent
         data_omics2_new.obsm['spaMultiVAE'] = final_latent
         scores = compute_supervised_scores(data_omics1_new,'spaMultiVAE')
-        
+        scores_refined = compute_supervised_scores(data_omics1_new,'spaMultiVAE_refined')
         jaccard1 = compute_jaccard(data_omics1_new, 'spaMultiVAE')
         jaccard2 = compute_jaccard(data_omics2_new, 'spaMultiVAE')
         moranI = compute_moranI(data_omics1_new, 'spaMultiVAE')
-        result.loc[len(result)] = [dataset, 'spaMultiVAE', scores['ari'],
-                                   scores['mi'], scores['nmi'], scores['ami'],
-                                   scores['hom'], scores['vme'],scores['average'], 
-                                   jaccard1, jaccard2,moranI]
+        moranI_refined = compute_moranI(data_omics1_new, 'spaMultiVAE_refined')
+        result.loc[len(result)] = [dataset, 'spaMultiVAE', scores['ari'], scores_refined['ari'],
+                                   scores['mi'], scores_refined['mi'], scores['nmi'], scores_refined['nmi'], 
+                                   scores['ami'], scores_refined['ami'],scores['hom'], scores_refined['hom'],
+                                   scores['vme'], scores_refined['vme'], scores['average'], scores_refined['average'], 
+                                   jaccard1, jaccard2, moranI, moranI_refined]
         result.to_csv('Results/Evaluation_spaMultiVAE.csv', index=False)
         print(result.tail(1))
     
