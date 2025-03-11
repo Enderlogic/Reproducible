@@ -1,16 +1,9 @@
 import os
 from Methods.miso.utils import *
-from Methods.miso import Miso
 import pandas as pd
 import numpy as np
 import scanpy as sc
-import matplotlib
-import matplotlib.pyplot as plt
-from umap import UMAP
-import sklearn
-import seaborn as sns
 from Methods.cosmos import cosmos
-from Methods.cosmos.pyWNN import pyWNN
 import h5py
 import anndata as ad
 import warnings
@@ -48,35 +41,15 @@ for dataset in ['4_Human_Lymph_Node', '5_Mouse_Brain', '6_Mouse_Embryo']:
 
     if dataset == '4_Human_Lymph_Node':
         adata_omics2 = sc.read_h5ad('../Dataset/' + dataset + '/adata_ADT.h5ad')
-
-        # sc.pp.normalize_total(data_omics2, target_sum=1e4)
-        # sc.pp.log1p(data_omics2)
-        # sc.pp.scale(data_omics2)
-        # data_omics2.obsm['X_pca'] = data_omics2.X
         LayerName_RNA = list(adata_omics2.obs['cluster'])  # 获取ATAC的LayerName
         n_cluster = 10
 
     elif dataset == '5_Mouse_Brain':
         adata_omics2 = sc.read_h5ad('../Dataset/' + dataset + '/adata_peaks_normalized.h5ad')
-        # data_omics2 = ad.AnnData(data_omics2.obsm['X_lsi'], obs=data_omics2.obs, obsm=data_omics2.obsm)
-        # adata_omics2 = preprocess(data_omics2, modality='atac')
         n_cluster = 15
-        # df_data_ATAC = data_omics2.X.astype('float64')  # 提取ATAC数据矩阵
-        # loc_ATAC = np.array(adata_omics2.obsm['spatial'])  # 获取ATAC数据的空间位置信息
-        # LayerName_ATAC = list(adata_omics2.obs['cluster'])  # 获取ATAC的LayerName
-        # # 如果LayerName是字节类型，需要进行解码
-        # if isinstance(LayerName_ATAC[0], bytes):
-        #     LayerName_ATAC = [item.decode('utf-8') for item in LayerName_ATAC]
     elif dataset == '6_Mouse_Embryo':
         adata_omics2 = sc.read_h5ad('../Dataset/' + dataset + '/adata_peaks.h5ad')
-
         n_cluster = 14
-        # df_data_ATAC = data_omics2.X.astype('float64')  # 提取ATAC数据矩阵
-        # loc_ATAC = np.array(adata_omics2.obsm['spatial'])  # 获取ATAC数据的空间位置信息
-        # LayerName_ATAC = list(adata_omics2.obs['cluster'])  # 获取ATAC的LayerName
-        # 如果LayerName是字节类型，需要进行解码
-        # if isinstance(LayerName_ATAC[0], bytes):
-        #     LayerName_ATAC = [item.decode('utf-8') for item in LayerName_ATAC]
     else:
         raise ValueError('Unknown dataset')
 
@@ -107,17 +80,15 @@ for dataset in ['4_Human_Lymph_Node', '5_Mouse_Brain', '6_Mouse_Embryo']:
                           random_seed=random_seed, gpu=0, regularization_acceleration=True, edge_subset_sz=1000000)
         weights = cosmos_comb.weights
         embedding = cosmos_comb.embedding
-        df_embedding = pd.DataFrame(embedding)
+        adata_omics2.obsm['emb']=embedding
 
         # Clustering of COSMOS integration
 
-        embedding_adata = sc.AnnData(df_embedding)
-        cluster_learned = mclust_R(embedding_adata, num_cluster=n_cluster)
-
+        adata_omics2 = mclust_R(adata_omics2,used_obsm='emb',num_cluster=n_cluster)
+        cluster_learned = adata_omics2.obs['mclust']
         adata_omics2.obs['clusters'] = cluster_learned
         cluster = LayerName
         adata_omics1.obsm['emb'] = embedding  # 存储聚类标签,anndata格式
-        adata_omics2.obsm['emb'] = embedding
         ari = adjusted_rand_score(cluster, cluster_learned)
         mi = mutual_info_score(cluster, cluster_learned)
         nmi = normalized_mutual_info_score(cluster, cluster_learned)
