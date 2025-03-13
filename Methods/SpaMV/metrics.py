@@ -1,6 +1,7 @@
 import pandas
 import rbo
 from pandas import get_dummies
+from scipy.sparse import issparse
 from sklearn.neighbors import kneighbors_graph
 import scanpy as sc
 import numpy as np
@@ -36,8 +37,6 @@ def compute_jaccard(adata, key, k=50):
         sc.pp.neighbors(adata, use_rep='X_pca', key_added='X', n_neighbors=k)
     elif 'X_lsi' in adata.obsm:
         sc.pp.neighbors(adata, use_rep='X_lsi', key_added='X', n_neighbors=k)
-    else:
-        sc.pp.neighbors(adata, use_rep='X', key_added='X', n_neighbors=k)
     jaccard = ((adata.obsp[key + '_distances'].toarray() * adata.obsp['X_distances'].toarray() > 0).sum(1) / (
             adata.obsp[key + '_distances'].toarray() + adata.obsp['X_distances'].toarray() > 0).sum(1)).mean()
     return jaccard
@@ -57,7 +56,8 @@ def get_cell_probability(data, wi, quantiles_df, wj=None, max=1):
 
 
 def compute_topic_coherence(adata, beta, topk=20, quantile=0.75, individual=False):
-    data = pandas.DataFrame(adata.X.toarray(), index=adata.obs_names, columns=adata.var_names)
+    data = pandas.DataFrame(adata.X.toarray() if issparse(adata.X) else adata.X, index=adata.obs_names,
+                            columns=adata.var_names)
     quantiles = np.quantile(data, q=quantile, axis=0)
     quantiles_df = pandas.DataFrame(quantiles, index=adata.var_names, columns=["quantiles"])
 
@@ -95,14 +95,13 @@ def compute_topic_coherence(adata, beta, topk=20, quantile=0.75, individual=Fals
 
 
 def compute_topic_diversity(beta, topk=20):
-    TD = np.zeros(beta.shape[1])
+    TD = np.ones(beta.shape[1])
     for i in range(beta.shape[1]):
         for j in range(beta.shape[1]):
             if i != j:
-                li = beta.iloc.nlargest(topk, i).index.tolist()
-                lj = beta.iloc.nlargest(topk, j).index.tolist()
+                li = beta.nlargest(topk, beta.columns[i]).index.tolist()
+                lj = beta.nlargest(topk, beta.columns[j]).index.tolist()
                 r = rbo.RankingSimilarity(li, lj).rbo()
                 if 1 - r < TD[i]:
                     TD[i] = 1 - r
     return TD.mean()
-

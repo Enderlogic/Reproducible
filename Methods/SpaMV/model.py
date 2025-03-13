@@ -31,7 +31,8 @@ class spamv(PyroModule):
         self.init_bg_means = init_bg_means
         self.weights = weights
         self.interpretable = interpretable
-        self.prior = LogNormal if interpretable else Normal
+        # self.prior = LogNormal if interpretable else Normal
+        self.prior = Normal
         self.recon_types = recon_types
         self.device = device
         self.omics_names = omics_names
@@ -40,55 +41,39 @@ class spamv(PyroModule):
                          enumerate(zp_dims)]
 
         for i in range(len(data_dims)):
-            setattr(self, "disp_" + omics_names[i], PyroParam(torch.zeros(data_dims[i], device=device)))
             if interpretable:
+                # self.set_attr(["disp"], PyroParam(self._zeros_init(data_dims[i])),
+                #               PyroParam(self._ones_init(data_dims[i])))
+                setattr(self, "disp_" + omics_names[i], PyroParam(self._zeros_init(data_dims[i])))
+                if recon_types[i] == "zinb":
+                    setattr(self, "decoder_zi_logits_" + omics_names[i],
+                            Decoder_zi_logits(self.latent_dims[i], hidden_size, data_dims[i]))
                 setattr(self, "zs_encoder_" + omics_names[i],
-                        MLPEncoder(data_dims[i], hidden_size, zs_dim, heads, dropout_prob).to(device))
+                        MLPEncoder(data_dims[i], hidden_size, zs_dim, heads).to(device))
+                if zp_dims[i] > 0:
+                    if interpretable:
+                        setattr(self, "zp_encoder_" + omics_names[i],
+                                MLPEncoder(data_dims[i], hidden_size, zp_dims[i], heads).to(device))
+                self.set_attr(["c"], i, (1))
+                # setattr(self, 'c_mean_' + self.omics_names[i], PyroParam(self._ones_init(1)))
+                # setattr(self, 'c_std_' + self.omics_names[i],
+                #         PyroParam(self._ones_init(1), constraint=constraints.positive))
+                self.set_attr(["delta", "bg"], i, data_dims[i])
+                self.set_attr(["tau"], i, (self.latent_dims[i], 1))
+                self.set_attr(["lambda", "beta"], i, (self.latent_dims[i], data_dims[i]))
             else:
+                setattr(self, "disp_" + omics_names[i], PyroParam(self._zeros_init(data_dims[i])))
                 setattr(self, "zs_encoder_" + omics_names[i],
                         GAT(in_channels=data_dims[i], hidden_channels=hidden_size, num_layers=1,
                             out_channels=zs_dim * 2, heads=heads, dropout=dropout_prob, v2=True, concat=False))
-            if zp_dims[i] > 0:
-                if interpretable:
-                    setattr(self, "zp_encoder_" + omics_names[i],
-                            MLPEncoder(data_dims[i], hidden_size, zp_dims[i], heads, dropout_prob).to(device))
-                else:
+                setattr(self, "decoder_" + omics_names[i],
+                        Decoder(self.latent_dims[i], hidden_size, data_dims[i], recon_types[i]).to(device))
+                if zp_dims[i] > 0:
                     setattr(self, "zp_encoder_" + omics_names[i],
                             GAT(in_channels=data_dims[i], hidden_channels=hidden_size, num_layers=1,
                                 out_channels=zp_dims[i] * 2, heads=heads, dropout=dropout_prob, v2=True, concat=False))
-                setattr(self, "zp_aux_std_" + omics_names[i],
-                        PyroParam(self._ones_init(zp_dims[i], device=device), constraint=constraints.positive))
-            if interpretable:
-                setattr(self, "c_mean_" + omics_names[i], PyroParam(torch.zeros(1, device=device)))
-                setattr(self, "c_std_" + omics_names[i],
-                        PyroParam(self._ones_init(1, device=device), constraint=constraints.positive))
-                setattr(self, 'delta_mean_' + omics_names[i], PyroParam(torch.zeros(data_dims[i], device=device)))
-                setattr(self, 'delta_std_' + omics_names[i],
-                        PyroParam(self._ones_init(data_dims[i], device=device), constraint=constraints.positive))
-                setattr(self, 'bg_mean_' + omics_names[i], PyroParam(torch.zeros(data_dims[i], device=device)))
-                setattr(self, 'bg_std_' + omics_names[i],
-                        PyroParam(self._ones_init(data_dims[i], device=device), constraint=constraints.positive))
-                setattr(self, 'tau_mean_' + omics_names[i],
-                        PyroParam(torch.zeros((self.latent_dims[i], 1), device=device)))
-                setattr(self, 'tau_std_' + omics_names[i],
-                        PyroParam(self._ones_init((self.latent_dims[i], 1), device=device),
-                                  constraint=constraints.positive))
-                setattr(self, 'lambda_mean_' + omics_names[i],
-                        PyroParam(torch.zeros((self.latent_dims[i], data_dims[i]), device=device)))
-                setattr(self, 'lambda_std_' + omics_names[i],
-                        PyroParam(self._ones_init((self.latent_dims[i], data_dims[i]), device=device),
-                                  constraint=constraints.positive))
-                setattr(self, 'beta_mean_' + omics_names[i],
-                        PyroParam(torch.zeros((self.latent_dims[i], data_dims[i]), device=device)))
-                setattr(self, 'beta_std_' + omics_names[i],
-                        PyroParam(self._ones_init((self.latent_dims[i], data_dims[i]), device=device),
-                                  constraint=constraints.positive))
-                if recon_types[i] == "zinb":
-                    setattr(self, "decoder_zi_logits_" + omics_names[i],
-                            Decoder_zi_logits(self.latent_dims[i], hidden_size, data_dims[i]).to(device))
-            else:
-                setattr(self, "decoder_" + omics_names[i],
-                        Decoder(self.latent_dims[i], hidden_size, data_dims[i], recon_types[i]).to(device))
+                    setattr(self, "zp_aux_std_" + omics_names[i],
+                            PyroParam(self._ones_init(zp_dims[i]), constraint=constraints.positive))
         self.omics_plate = [self.get_plate("omics_" + omics_names[i]) for i in range(len(data_dims))]
         self.latent_omics_plate = [self.get_plate("latent_" + omics_names[i]) for i in range(len(data_dims))]
 
@@ -115,8 +100,17 @@ class spamv(PyroModule):
                                                             "size": self.data_dims[i], "dim": -1}
         return pyro.plate(**{**plate_kwargs[name], **kwargs})
 
-    def _ones_init(self, shape, device=torch.device("cpu"), multiplier=0.1):
-        return torch.ones(shape, device=device) * multiplier
+    def _zeros_init(self, shape):
+        return torch.zeros(shape, device=self.device)
+
+    def _ones_init(self, shape, multiplier=0.1):
+        return torch.ones(shape, device=self.device) * multiplier
+
+    def set_attr(self, names, omics_id, shape):
+        for name in names:
+            setattr(self, name + '_mean_' + self.omics_names[omics_id], PyroParam(self._zeros_init(shape)))
+            setattr(self, name + '_std_' + self.omics_names[omics_id],
+                    PyroParam(self._ones_init(shape), constraint=constraints.positive))
 
     def model(self, data, edge_index):
         pyro.module("spamv", self)
@@ -151,18 +145,22 @@ class spamv(PyroModule):
                 zs = pyro.sample("zs_" + self.omics_names[i], self.prior(torch.zeros(self.zs_dim, device=device),
                                                                          torch.ones(self.zs_dim,
                                                                                     device=device)).to_event(1))
-                zs = zs.clamp(min=1e-10 if self.interpretable else -1e6, max=1e6)
+                # if self.interpretable:
+                #     zs = F.softplus(zs)
+                # zs = zs.clamp(min=1e-10 if self.interpretable else -1e6, max=1e6)
                 zss.append(zs)
                 if self.zp_dims[i] > 0:
                     zp = pyro.sample("zp_" + self.omics_names[i],
                                      self.prior(torch.zeros(self.zp_dims[i], device=device),
                                                 torch.ones(self.zp_dims[i], device=device)).to_event(1))
-                    zp = zp.clamp(min=1e-10 if self.interpretable else -1e6, max=1e6)
+                    # if self.interpretable:
+                    #     zp = F.softplus(zp)
+                    # zp = zp.clamp(min=1e-10 if self.interpretable else -1e6, max=1e6)
                     zps.append(zp)
-                    zp_auxs.append(torch.zeros((data[0].shape[0], self.zp_dims[i]),
-                                               device=device) if self.interpretable else Normal(
-                        torch.zeros(self.zp_dims[i], device=device),
-                        getattr(self, "zp_aux_std_" + self.omics_names[i])).rsample((d.shape[0],)))
+                    zp_auxs.append(
+                        self._zeros_init((data[0].shape[0], self.zp_dims[i])) if self.interpretable else Normal(
+                            torch.zeros(self.zp_dims[i], device=device),
+                            getattr(self, "zp_aux_std_" + self.omics_names[i])).rsample((d.shape[0],)))
                 else:
                     zps.append(None)
                     zp_auxs.append(None)
@@ -176,9 +174,10 @@ class spamv(PyroModule):
                     # cross reconstruction (using shared embedding from data i to reconstruct data j)
                     z = torch.cat((zss[i], zp_auxs[j]), dim=1) if self.zp_dims[j] > 0 else zss[i]
                 if self.interpretable:
-                    x_tilde = z @ F.softplus(betas[j])
-                    x_tilde = x_tilde.clamp(min=1e-10)
-                    x_tilde = lss[j] * x_tilde / x_tilde.sum(1, keepdim=True)
+                    # x_tilde = z @ F.softmax(betas[j], dim=1)
+                    # x_tilde = x_tilde.clamp(min=1e-10)
+                    # x_tilde = lss[j] * x_tilde / x_tilde.sum(1, keepdim=True)
+                    x_tilde = lss[j] * F.softmax(z, 1) @ F.softmax(betas[j], 1)
                     if self.recon_types[j] == 'zinb':
                         zi_logits = getattr(self, "decoder_zi_logits_" + self.omics_names[j])(z)
                 else:
@@ -188,8 +187,6 @@ class spamv(PyroModule):
                         x_tilde, zi_logits = getattr(self, "decoder_" + self.omics_names[j])(z)
                     else:
                         raise NotImplementedError
-                    if self.recon_types[j] in ['zinb', 'nb']:
-                        x_tilde = x_tilde.clamp(min=1e-10, max=1e8)
                 with sample_plate:
                     with poutine.scale(scale=self.weights[j]):
                         disp = getattr(self, "disp_" + self.omics_names[j]).exp()
@@ -229,63 +226,59 @@ class spamv(PyroModule):
                                     Normal(getattr(self, 'beta_mean_' + self.omics_names[i]),
                                            getattr(self, 'beta_std_' + self.omics_names[i])))
             with sample_plate:
-                zs_mean, zs_scale = getattr(self, "zs_encoder_" + self.omics_names[i])(d, e).split(self.zs_dim, dim=1)
+                zs_mean, zs_scale = getattr(self, "zs_encoder_" + self.omics_names[i])(d, e).split(self.zs_dim, 1)
                 pyro.sample("zs_" + self.omics_names[i], self.prior(zs_mean, zs_scale if self.interpretable else (
                         zs_scale.clamp(max=5) / 2).exp()).to_event(1))
                 if self.zp_dims[i] > 0:
                     zp_mean, zp_scale = getattr(self, "zp_encoder_" + self.omics_names[i])(d, e).split(self.zp_dims[i],
-                                                                                                       dim=1)
+                                                                                                       1)
                     pyro.sample("zp_" + self.omics_names[i], self.prior(zp_mean, zp_scale if self.interpretable else (
                             zp_scale.clamp(max=5) / 2).exp()).to_event(1))
 
-    def get_embedding(self, data, edge_index, train_eval=False):
-        if train_eval:
-            self.train()
-        else:
-            self.eval()
+    def get_embedding(self, data, edge_index):
         z_mean = torch.zeros((data[0].shape[0], self.zs_dim), device=self.device)
         for i, d, e in zip(range(len(data)), data, edge_index):
-            zs_mean, zs_scale = getattr(self, "zs_encoder_" + self.omics_names[i])(d, e).split(self.zs_dim, dim=1)
-            z_mean += self.mean(zs_mean, zs_scale) if self.interpretable else zs_mean / len(data)
-        if self.interpretable:
-            z_mean -= numpy.log(len(data))
+            zs_mean = getattr(self, "zs_encoder_" + self.omics_names[i])(d, e).split(self.zs_dim, 1)[0]
+            z_mean += zs_mean / len(data)
         for i, d, e in zip(range(len(data)), data, edge_index):
             if self.zp_dims[i] > 0:
-                zp_mean, zp_scale = getattr(self, "zp_encoder_" + self.omics_names[i])(d, e).split(self.zp_dims[i],
-                                                                                                   dim=1)
-                z_mean = torch.cat((z_mean, self.mean(zp_mean, zp_scale) if self.interpretable else zp_mean), dim=1)
-        z_mean = z_mean.clamp(min=1e-10 if self.interpretable else -1e6, max=1e6)
+                zp_mean = getattr(self, "zp_encoder_" + self.omics_names[i])(d, e).split(self.zp_dims[i], 1)[0]
+                z_mean = torch.cat((z_mean, zp_mean), dim=1)
         return z_mean
 
-    def get_private_latents(self, data, edge_index, train_eval):
+    def get_private_latent(self, data, edge_index):
         zp = []
-        if train_eval:
-            self.train()
-        else:
-            self.eval()
         for i, d, e in zip(range(len(data)), data, edge_index):
             if self.zp_dims[i] > 0:
-                zp_mean, zp_scale = getattr(self, "zp_encoder_" + self.omics_names[i])(d, e).split(self.zp_dims[i],
-                                                                                                   dim=1)
+                zp_mean, zp_scale = getattr(self, "zp_encoder_" + self.omics_names[i])(d, e).split(self.zp_dims[i], 1)
                 zp.append(self.prior(zp_mean,
                                      zp_scale if self.interpretable else (zp_scale.clamp(max=5) / 2).exp()).rsample())
-        return torch.cat(zp, dim=1)
+        return zp
 
-    def get_separate_latents(self, data, edge_index):
+    def get_private_embedding(self, data, edge_index):
+        zp = []
+        for i, d, e in zip(range(len(data)), data, edge_index):
+            if self.zp_dims[i] > 0:
+                zp_mean = getattr(self, "zp_encoder_" + self.omics_names[i])(d, e).split(self.zp_dims[i], 1)[0]
+                zp.append(zp_mean)
+        return zp
+
+    def get_shared_embedding(self, data, edge_index):
+        zs = torch.zeros((data[0].shape[0], self.zs_dim), device=self.device)
+        for i, d, e in zip(range(len(data)), data, edge_index):
+            zs += getattr(self, "zs_encoder_" + self.omics_names[i])(d, e).split(self.zs_dim, 1)[0] / len(data)
+        return zs
+
+    def get_separate_embedding(self, data, edge_index):
         self.eval()
         output = {}
         with torch.no_grad():
             for i, d, e in zip(range(len(data)), data, edge_index):
-                zs_mean, zs_scale = getattr(self, "zs_encoder_" + self.omics_names[i])(d, e).split(self.zs_dim,
-                                                                                                   dim=1)
-                # zs_mean, zs_scale = getattr(self, "zs_encoder_" + self.omics_names[i])(d, e)
-                output['zs_' + self.omics_names[i]] = self.mean(zs_mean, zs_scale) if self.interpretable else zs_mean
+                zs_mean = getattr(self, "zs_encoder_" + self.omics_names[i])(d, e).split(self.zs_dim, 1)[0]
+                output['zs_' + self.omics_names[i]] = zs_mean
                 if self.zp_dims[i] > 0:
-                    zp_mean, zp_scale = getattr(self, "zp_encoder_" + self.omics_names[i])(d, e).split(self.zp_dims[i],
-                                                                                                       dim=1)
-                    # zp_mean, zp_scale = getattr(self, "zp_encoder_" + self.omics_names[i])(d, e)
-                    output['zp_' + self.omics_names[i]] = self.mean(zp_mean,
-                                                                    zp_scale) if self.interpretable else zp_mean
+                    zp_mean = getattr(self, "zp_encoder_" + self.omics_names[i])(d, e).split(self.zp_dims[i], 1)[0]
+                    output['zp_' + self.omics_names[i]] = zp_mean
         return output
 
     @torch.inference_mode()

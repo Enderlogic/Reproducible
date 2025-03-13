@@ -17,7 +17,7 @@ from scipy.sparse import csr_matrix, issparse
 from sklearn.neighbors import kneighbors_graph
 from torch_geometric.utils import coalesce
 
-# sc.set_figure_params(scanpy=True, fontsize=20)
+sc.set_figure_params(scanpy=True, fontsize=20)
 
 
 def construct_graph_by_coordinate(cell_position, neighborhood_depth=3, device='cpu'):
@@ -81,7 +81,7 @@ def get_init_bg(x):
 
 
 def plot_embedding_results(adatas, omics_names, topic_abundance, feature_topics, save=True, folder_path=None,
-                           file_name=None, show=False, full=False, corresponding_features=True, size=400):
+                           file_name=None, show=False, full=False, corresponding_features=True, size=350):
     element_names = []
     for omics_name in omics_names:
         if omics_name == "Transcriptomics" or "H3K27" in omics_name:
@@ -99,7 +99,7 @@ def plot_embedding_results(adatas, omics_names, topic_abundance, feature_topics,
         zp_dims.append(len([item for item in topic_abundance.columns if omics_names[i] in item]))
     n_col = max(zp_dims + [zs_dim])
     n_row = n_omics * 3 + 1 if corresponding_features else n_omics + 1
-    fig, axes = plt.subplots(n_row, n_col, figsize=(n_col * 6, n_row * 5))
+    fig, axes = plt.subplots(n_row, n_col, figsize=(n_col * 5, n_row * 5))
     if zs_dim < n_col:
         for i in range(n_col - zs_dim):
             for j in range(1 + n_omics if corresponding_features else 1):
@@ -117,7 +117,8 @@ def plot_embedding_results(adatas, omics_names, topic_abundance, feature_topics,
         if corresponding_features:
             for j in range(n_omics):
                 mrf = feature_topics[j].nlargest(1, topic_name).index[0]
-                embedding(adatas[j], color=mrf, vmax='p99', basis='spatial', size=size, show=False, ax=axes[1 + j, i],
+                embedding(adatas[j], color=mrf, vmax='p99', basis='spatial', size=size, cmap='coolwarm', show=False,
+                          ax=axes[1 + j, i],
                           title=mrf + '\nMost relevant ' + element_names[j] + '\nw.r.t. ' + topic_name)
     for i in range(zs_dim):
         for j in range(n_omics + 1 if corresponding_features else 1):
@@ -132,7 +133,7 @@ def plot_embedding_results(adatas, omics_names, topic_abundance, feature_topics,
                       ax=axes[1 + n_omics + i * n_omics if corresponding_features else 1 + i, j])
             if corresponding_features:
                 mrf = feature_topics[i].nlargest(1, topic_name).index[0]
-                embedding(adatas[i], color=mrf, vmax='p99', size=size, show=False, basis='spatial',
+                embedding(adatas[i], color=mrf, vmax='p99', size=size, show=False, cmap='coolwarm', basis='spatial',
                           title=mrf + '\nMost relevant ' + element_names[i] + '\nw.r.t. ' + topic_name,
                           ax=axes[1 + n_omics + i * n_omics + 1, j])
     for i in range(n_omics):
@@ -437,40 +438,23 @@ def cosine_similarity(A, B):
     return np.dot(A, B) / (norm(A) * norm(B))
 
 
-def compute_similarity(z, w):
-    zs_dim = len([item for item in z.columns if 'Shared' in item])
+def compute_similarity(z, w=None):
     similarity_spot = DataFrame(np.zeros((z.shape[1], z.shape[1])), columns=z.columns, index=z.columns)
-    similarity_feature = DataFrame(np.zeros((z.shape[1], z.shape[1])), columns=z.columns, index=z.columns)
-    for i in z.columns[:zs_dim]:
+    for i in z.columns:
         zi = z[i]
-        w0_i = w[0][i]
-        w1_i = w[1][i]
         for j in z.columns[np.where(z.columns == i)[0][0] + 1:]:
             zj = z[j]
             similarity_spot.loc[i, j] = cosine_similarity(zi.values, zj.values)
-            if j in w[0].columns:
-                w0_j = w[0][j]
-                similarity_feature.loc[i, j] += cosine_similarity(w0_i.values, w0_j.values) / 2
-            if j in w[1].columns:
-                w1_j = w[1][j]
-                similarity_feature.loc[i, j] += cosine_similarity(w1_i.values, w1_j.values) / 2
-    for i in w[0].columns[zs_dim: -1]:
-        zi = z[i]
-        w0_i = w[0][i]
-        for j in w[0].columns[np.where(w[0].columns == i)[0][0] + 1:]:
-            zj = z[j]
-            similarity_spot.loc[i, j] = cosine_similarity(zi.values, zj.values)
-            w0_j = w[0][j]
-            similarity_feature.loc[i, j] = cosine_similarity(w0_i.values, w0_j.values)
-    for i in w[1].columns[zs_dim: -1]:
-        zi = z[i]
-        w1_i = w[1][i]
-        for j in w[1].columns[np.where(w[1].columns == i)[0][0] + 1:]:
-            zj = z[j]
-            similarity_spot.loc[i, j] = cosine_similarity(zi.values, zj.values)
-            w1_j = w[1][j]
-            similarity_feature.loc[i, j] = cosine_similarity(w1_i.values, w1_j.values)
-    return similarity_spot, similarity_feature
+
+    if w is not None:
+        similarity_feature = DataFrame(np.zeros((z.shape[1], z.shape[1])), columns=z.columns, index=z.columns)
+        for wi in w:
+            for i in wi.columns[:-1]:
+                for j in wi.columns[np.where(wi.columns == i)[0][0] + 1:]:
+                    similarity_feature.loc[i, j] += cosine_similarity(wi[i], wi[j]) / 2 if i in z.columns and j in z.columns else cosine_similarity(wi[i], wi[j])
+        return similarity_spot, similarity_feature
+    else:
+        return similarity_spot
 
 
 def visualize_latent(z, location):
