@@ -129,9 +129,14 @@ def set_random_seed(seed=100):
 
 def compute_jaccard(adata, key, k=50):
     sc.pp.neighbors(adata, use_rep=key, key_added=key, n_neighbors=k)
-    sc.pp.neighbors(adata, use_rep='X_pca', key_added='X_pca', n_neighbors=k)
-    jaccard = ((adata.obsp[key + '_distances'].toarray() * adata.obsp['X_pca_distances'].toarray() > 0).sum(1) / (
-            adata.obsp[key + '_distances'].toarray() + adata.obsp['X_pca_distances'].toarray() > 0).sum(1)).mean()
+    if 'X_pca' in adata.obsm:
+        sc.pp.neighbors(adata, use_rep='X_pca', key_added='X', n_neighbors=k)
+    elif 'X_lsi' in adata.obsm:
+        sc.pp.neighbors(adata, use_rep='X_lsi', key_added='X', n_neighbors=k)
+    else:
+        sc.pp.neighbors(adata, use_rep='X', key_added='X', n_neighbors=k)
+    jaccard = ((adata.obsp[key + '_distances'].toarray() * adata.obsp['X_distances'].toarray() > 0).sum(1) / (
+            adata.obsp[key + '_distances'].toarray() + adata.obsp['X_distances'].toarray() > 0).sum(1)).mean()
     return jaccard
 
 def compute_moranI(adata, key):
@@ -157,3 +162,24 @@ def pca(adata, use_reps=None, n_comps=10):
             feat_pca = pca.fit_transform(adata.X)
 
     return feat_pca
+
+def clr_normalize_each_cell(adata, inplace=True):
+    """Normalize count vector for each cell, i.e. for each row of .X"""
+
+    import numpy as np
+    import scipy
+
+    def seurat_clr(x):
+        # TODO: support sparseness
+        s = np.sum(np.log1p(x[x > 0]))
+        exp = np.exp(s / len(x))
+        return np.log1p(x / exp)
+
+    if not inplace:
+        adata = adata.copy()
+
+    # apply to dense or sparse matrix, along axis. returns dense matrix
+    adata.X = np.apply_along_axis(
+        seurat_clr, 1, (adata.X.toarray() if scipy.sparse.issparse(adata.X) else np.array(adata.X))
+    )
+    return adata

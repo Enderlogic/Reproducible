@@ -43,18 +43,7 @@ class Miso(nn.Module):
 
         adj = [calculate_affinity(i, sparse=self.sparse, neighbors=neighbors) for i in features]
         self.adj1 = adj
-        # pcs = [PCA(128).fit_transform(i) if i.shape[1] > 128 else i for i in features]
-
-        # Apply PCA to RNA data only (skip if ATAC data is already reduced)
-        pcs = []
-        for i, feature in enumerate(features):
-            if feature.shape[1] > 128:  # Only apply PCA if there are more than 128 features
-                if i == 0:  # Assuming RNA data is the first view (index 0)
-                    pcs.append(PCA(50).fit_transform(feature))  # Apply PCA to RNA data
-                else:
-                    pcs.append(feature)  # Skip PCA for ATAC or other data
-            else:
-                pcs.append(feature)  # Skip PCA if the number of features is already less than 128
+        pcs = [PCA(128).fit_transform(i) if i.shape[1] > 128 else i for i in features]
 
         self.pcs = [torch.Tensor(i).to(self.device) for i in pcs]
         if not self.sparse:
@@ -94,7 +83,7 @@ class Miso(nn.Module):
         for i in range(self.num_views):
             self.mlps[i].train()
             optimizer = optim.Adam(self.mlps[i].parameters(), lr=1e-3)
-            for epoch in tqdm(range(10), desc='Training network for modality ' + str(i + 1)):
+            for epoch in tqdm(range(1000), desc='Training network for modality ' + str(i + 1)):
                 optimizer.zero_grad()
                 x_hat = self.mlps[i](self.pcs[i])
                 Y1 = self.mlps[i].get_embeddings(self.pcs[i])
