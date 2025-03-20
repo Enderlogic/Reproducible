@@ -1,9 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn import BatchNorm1d
-from torch.nn.init import xavier_normal_
-from torch_geometric.nn import GATv2Conv, BatchNorm, GCN, GCNConv
+from torch_geometric.nn import GATv2Conv, BatchNorm
 
 
 class MLPEncoder(nn.Module):

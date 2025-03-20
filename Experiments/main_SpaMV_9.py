@@ -19,7 +19,8 @@ from Methods.SpaMV.metrics import compute_topic_coherence, compute_topic_diversi
 import scanpy as sc
 import wandb
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 print(device)
 
 dataset = '9_Mouse_Thymus'
@@ -29,27 +30,30 @@ recon_types = ['nb', 'nb']
 
 adata_rna = sc.read_h5ad(data_folder + '/adata_RNA.h5ad')
 sc.pp.filter_genes(adata_rna, min_cells=10)
+sc.pp.filter_cells(adata_rna, min_counts=100)
 adata_rna = adata_rna[:, (adata_rna.X > 1).sum(0) > adata_rna.n_obs / 100]
-sc.pp.normalize_total(adata_rna, target_sum=1e4)
-sc.pp.highly_variable_genes(adata_rna, subset=True, n_top_genes=3000, flavor='seurat_v3')
-sc.pp.filter_cells(adata_rna, min_genes=1)
+sc.pp.normalize_total(adata_rna)
+sc.pp.log1p(adata_rna)
+sc.pp.highly_variable_genes(adata_rna, subset=True, n_top_genes=1000, flavor='seurat')
 
 adata_pro = sc.read_h5ad(data_folder + '/adata_ADT.h5ad')
 adata_pro = adata_pro[adata_pro.obs_names.intersection(adata_rna.obs_names)]
+adata_pro = clr_normalize_each_cell(adata_pro)
 data = [adata_rna, adata_pro]
 
 seed = random.randint(1, 10000)
 print('data: {}, seed {}'.format(dataset, seed))
-wandb.init()
+wandb.init(project="9_Mouse_Thymus")
 wandb.login()
-model = SpaMV(data, weights=[1, 10], interpretable=True, random_seed=seed, learning_rate=1e-2, dropout_prob=0,
-              neighborhood_embedding=0, recon_types=recon_types, omics_names=omics_names, max_epochs=800, device=device)
-model.train(dataset, size=100)
+model = SpaMV(data, weights=[1, 10], zs_dim=10, zp_dims=[10, 10], interpretable=True, random_seed=seed,
+              learning_rate=1e-2, dropout_prob=0, neighborhood_embedding=10, recon_types=recon_types,
+              omics_names=omics_names, max_epochs=800, device=device)
+model.train(dataset, size=20)
 wandb.finish()
 zs = model.get_separate_embedding()
 for key, value in zs.items():
     data[0].obs = DataFrame(value.detach().cpu().numpy())
-    embedding(data[0], color=data[0].obs.columns, basis='spatial', ncols=5, show=False, size=150, vmax='p99')
+    embedding(data[0], color=data[0].obs.columns, basis='spatial', ncols=5, show=False, size=50, vmax='p99')
     plt.savefig('../Results/' + dataset + '/SpaMV_' + key + '_stage3.pdf')
 z, w = model.get_embedding_and_feature_by_topic(map=True)
 tc0 = compute_topic_coherence(data[0], w[0], topk=5 if omics_names[0] == 'Proteomics' else 20)
@@ -66,7 +70,7 @@ plt.tight_layout()
 plt.savefig('../Results/' + dataset + '/SpaMV_cluster.pdf')
 
 plot_embedding_results(data, omics_names, z, w, folder_path='../Results/' + dataset + '/',
-                       file_name='SpaMV_topics.pdf', size=150)
+                       file_name='SpaMV_topics.pdf', size=40)
 z.to_csv('../Results/' + dataset + '/SpaMV_z.csv')
 w[0].to_csv('../Results/' + dataset + '/SpaMV_w_' + omics_names[0] + '.csv')
 w[1].to_csv('../Results/' + dataset + '/SpaMV_w_' + omics_names[1] + '.csv')

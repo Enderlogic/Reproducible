@@ -145,17 +145,11 @@ class spamv(PyroModule):
                 zs = pyro.sample("zs_" + self.omics_names[i], self.prior(torch.zeros(self.zs_dim, device=device),
                                                                          torch.ones(self.zs_dim,
                                                                                     device=device)).to_event(1))
-                # if self.interpretable:
-                #     zs = F.softplus(zs)
-                # zs = zs.clamp(min=1e-10 if self.interpretable else -1e6, max=1e6)
                 zss.append(zs)
                 if self.zp_dims[i] > 0:
                     zp = pyro.sample("zp_" + self.omics_names[i],
                                      self.prior(torch.zeros(self.zp_dims[i], device=device),
                                                 torch.ones(self.zp_dims[i], device=device)).to_event(1))
-                    # if self.interpretable:
-                    #     zp = F.softplus(zp)
-                    # zp = zp.clamp(min=1e-10 if self.interpretable else -1e6, max=1e6)
                     zps.append(zp)
                     zp_auxs.append(
                         self._zeros_init((data[0].shape[0], self.zp_dims[i])) if self.interpretable else Normal(
@@ -168,7 +162,6 @@ class spamv(PyroModule):
             for j in range(len(data)):
                 if i == j:
                     # self reconstruction
-                    # z = torch.cat((zss[i], zps[j]), dim=1) if self.zp_dims[j] > 0 else zss[i]
                     z = torch.cat((zss[i].detach(), zps[j]), dim=1) if self.zp_dims[j] > 0 else zss[i].detach()
                 else:
                     # cross reconstruction (using shared embedding from data i to reconstruct data j)
@@ -228,14 +221,18 @@ class spamv(PyroModule):
             with sample_plate:
                 zs_mean, zs_scale = getattr(self, "zs_encoder_" + self.omics_names[i])(d, e).split(self.zs_dim, 1)
                 pyro.sample("zs_" + self.omics_names[i], self.prior(zs_mean, zs_scale if self.interpretable else (
-                        zs_scale.clamp(max=5) / 2).exp()).to_event(1))
+                        zs_scale.clamp(min=-10, max=5) / 2).exp()).to_event(1))
                 if self.zp_dims[i] > 0:
                     zp_mean, zp_scale = getattr(self, "zp_encoder_" + self.omics_names[i])(d, e).split(self.zp_dims[i],
                                                                                                        1)
                     pyro.sample("zp_" + self.omics_names[i], self.prior(zp_mean, zp_scale if self.interpretable else (
-                            zp_scale.clamp(max=5) / 2).exp()).to_event(1))
+                            zp_scale.clamp(min=-10, max=5) / 2).exp()).to_event(1))
 
-    def get_embedding(self, data, edge_index):
+    def get_embedding(self, data, edge_index, train_eval=False):
+        if train_eval:
+            self.train()
+        else:
+            self.eval()
         z_mean = torch.zeros((data[0].shape[0], self.zs_dim), device=self.device)
         for i, d, e in zip(range(len(data)), data, edge_index):
             zs_mean = getattr(self, "zs_encoder_" + self.omics_names[i])(d, e).split(self.zs_dim, 1)[0]
@@ -246,13 +243,17 @@ class spamv(PyroModule):
                 z_mean = torch.cat((z_mean, zp_mean), dim=1)
         return z_mean
 
-    def get_private_latent(self, data, edge_index):
+    def get_private_latent(self, data, edge_index, train_eval=False):
         zp = []
+        if train_eval:
+            self.train()
+        else:
+            self.eval()
         for i, d, e in zip(range(len(data)), data, edge_index):
             if self.zp_dims[i] > 0:
                 zp_mean, zp_scale = getattr(self, "zp_encoder_" + self.omics_names[i])(d, e).split(self.zp_dims[i], 1)
-                zp.append(self.prior(zp_mean,
-                                     zp_scale if self.interpretable else (zp_scale.clamp(max=5) / 2).exp()).rsample())
+                zp.append(self.prior(zp_mean, zp_scale if self.interpretable else (
+                            zp_scale.clamp(min=-10, max=5) / 2).exp()).rsample())
         return zp
 
     def get_private_embedding(self, data, edge_index):

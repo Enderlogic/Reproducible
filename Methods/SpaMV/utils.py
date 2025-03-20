@@ -90,7 +90,7 @@ def plot_embedding_results(adatas, omics_names, topic_abundance, feature_topics,
             element_names.append("Protein")
         elif omics_name == "Epigenomics":
             element_names.append("Region of open chromatin")
-        elif omics_name == "Metabonomics":
+        elif omics_name == "Metabolomics":
             element_names.append("Metabolite")
     zs_dim = len([item for item in topic_abundance.columns if 'Shared' in item])
     n_omics = len(adatas)
@@ -223,20 +223,20 @@ def plot_clustering_results(adata, cluster_name, omics_names, folder_path, show=
 
 
 def ST_preprocess(adata_st, normalize=True, log=True, prune=False, highly_variable_genes=True, flavor="seurat_v3",
-                  n_top_genes=3000, pca=True, n_comps=50):
+                  n_top_genes=3000, pca=False, n_comps=50, scale=True):
     adata = adata_st.copy()
     if adata.n_vars > 50000:
         sc.pp.filter_genes(adata, min_cells=round(adata.n_obs * .05))
 
     adata.var['mt'] = np.logical_or(adata.var_names.str.startswith('MT-'), adata.var_names.str.startswith('mt-'))
     adata.var['rb'] = adata.var_names.str.startswith(('RP', 'Rp', 'rp'))
-
     sc.pp.calculate_qc_metrics(adata, qc_vars=['mt'], inplace=True)
     mask_cell = adata.obs['pct_counts_mt'] < 100
     mask_gene = np.logical_and(~adata.var['mt'], ~adata.var['rb'])
-
     adata = adata[mask_cell, mask_gene]
 
+    sc.pp.filter_genes(adata, min_cells=10)
+    sc.pp.filter_cells(adata, min_genes=200)
     if prune:
         adata = adata[:, (adata.X > 1).sum(0) > adata.n_obs / 100]
 
@@ -251,6 +251,9 @@ def ST_preprocess(adata_st, normalize=True, log=True, prune=False, highly_variab
 
     if pca:
         sc.pp.pca(adata, n_comps=n_comps)
+
+    if scale:
+        sc.pp.scale(adata)
 
     if highly_variable_genes:
         return adata[:, adata.var.highly_variable]

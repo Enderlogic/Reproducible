@@ -44,18 +44,18 @@ def GaussianKernelMatrix(x, sigma=1):
 
 class SpaMV:
     def __init__(self, adatas: List[AnnData], interpretable: bool, zp_dims: List[int] = None, zs_dim: int = None,
-                 weights: List[float] = None, recon_types: List[str] = None, omics_names: List[str] = None,
-                 device: torch.device = None, hidden_dim: int = 128, heads: int = 1,
-                 neighborhood_depth: int = 2, neighborhood_embedding: int = 10,
-                 random_seed: int = 1214, max_epochs: int = 800, dropout_prob: float = .2, min_kl: float = 1,
-                 max_kl: float = 1, learning_rate: float = None, folder_path: str = None, early_stopping: bool = True,
-                 patience: int = 200, n_cluster: int = 10, test_mode: bool = False, result: DataFrame = None):
+                 weights: List[float] = None, betas: List[float] = None, recon_types: List[str] = None,
+                 omics_names: List[str] = None, device: torch.device = None, hidden_dim: int = None, heads: int = 1,
+                 neighborhood_depth: int = 2, neighborhood_embedding: int = 10, random_seed: int = 0,
+                 max_epochs: int = 800, dropout_prob: float = .2, min_kl: float = 1, max_kl: float = 1,
+                 learning_rate: float = None, folder_path: str = None, early_stopping: bool = True, patience: int = 200,
+                 n_cluster: int = 10, test_mode: bool = False, result: DataFrame = None, plot: bool = False):
         pyro.clear_param_store()
         pyro.set_rng_seed(random_seed)
         torch.manual_seed(random_seed)
         self.n_omics = len(adatas)
         if zs_dim is None:
-            zs_dim = 15 if interpretable else 32
+            zs_dim = 10 if interpretable else 32
         elif zs_dim <= 0:
             raise ValueError("zs_dim must be a positive integer")
         self.zs_dim = zs_dim
@@ -63,20 +63,29 @@ class SpaMV:
             zp_dims = [10 if interpretable else 32 for _ in range(self.n_omics)]
         elif min(zp_dims) < 0:
             raise ValueError("all elements in zp_dims must be non-negative integers")
-
         self.zp_dims = zp_dims
         if weights is None:
             weights = [1 for _ in range(self.n_omics)]
         elif min(weights) < 0:
             raise ValueError("all elements in weights must be non-negative")
         self.weights = weights
+        if betas is None:
+            betas = [1 for _ in range(self.n_omics)]
+        elif min(betas) < 0:
+            raise ValueError("all elements in betas must be non-negative")
+        self.betas = betas
         if recon_types is None:
-            recon_types = ["nb" for _ in range(self.n_omics)]
+            recon_types = ["nb" for _ in range(self.n_omics)] if interpretable else ["gauss", "gauss"]
         else:
             for recon_type in recon_types:
                 if recon_type not in ['zinb', 'nb', 'gauss']:
                     raise ValueError("recon_type must be 'nb' or 'zinb' or 'gauss'")
         self.recon_types = recon_types
+        if hidden_dim is None:
+            hidden_dim = 128 if interpretable else 256
+        elif hidden_dim <= 0:
+            raise ValueError("hidden_dim must be a positive integer")
+        self.hidden_dim = hidden_dim
         self.omics_names = ["omics_{}".format(i) for i in range(self.n_omics)] if omics_names is None else omics_names
         if device:
             self.device = device
@@ -104,6 +113,7 @@ class SpaMV:
         self.n_cluster = n_cluster
         self.test_mode = test_mode
         self.result = result
+        self.plot = plot
         self.pretrain_epoch = 200
         self.epoch = 0
         self.epoch2 = 0
@@ -137,12 +147,14 @@ class SpaMV:
         for self.epoch in pbar:
             if self.epoch == self.pretrain_epoch:
                 self.early_stopper.min_training_loss = np.inf
-                zs = self.get_separate_embedding()
-                for key, value in zs.items():
-                    self.adatas[0].obs = DataFrame(value.detach().cpu().numpy())
-                    embedding(self.adatas[0], color=self.adatas[0].obs.columns, basis='spatial', ncols=5, show=False,
-                              size=size, vmax='p99')
-                    plt.savefig('../Results/' + dataname + '/' + key + '_stage1.pdf')
+                if self.interpretable:
+                    zs = self.get_separate_embedding()
+                    for key, value in zs.items():
+                        self.adatas[0].obs = DataFrame(value.detach().cpu().numpy())
+                        embedding(self.adatas[0], color=self.adatas[0].obs.columns, basis='spatial', ncols=5,
+                                  show=False, size=size, vmax='p99')
+                        plt.savefig('../Results/' + dataname + '/' + key + '_stage1.pdf')
+                        plt.close()
             if self.epoch >= self.pretrain_epoch:
                 if self.epoch % 100 == 0 or self.epoch == self.pretrain_epoch:
                     n_epochs = 100
@@ -174,7 +186,7 @@ class SpaMV:
                     print("Early Stopping")
                     break
 
-            if (self.epoch + 1) % 100 == 0 and self.test_mode:
+            if (self.epoch + 1) % 200 == 0 and self.test_mode:
                 if self.interpretable:
                     z, w = self.get_embedding_and_feature_by_topic(map=False)
                     if self.result is not None:
@@ -196,8 +208,8 @@ class SpaMV:
                         for emb_type in ['all']:
                             print("embedding type:", emb_type)
                             if emb_type == 'all':
-                                self.adatas[0].obsm[emb_type] = F.normalize(z, p=2, eps=1e-12,
-                                                                            dim=1).detach().cpu().numpy()
+                                # self.adatas[0].obsm[emb_type] = F.normalize(z, p=2, eps=1e-12, dim=1).detach().cpu().numpy()
+                                self.adatas[0].obsm[emb_type] = z
                                 self.adatas[0].obsm['zs+zp1'] = self.adatas[0].obsm[emb_type][:,
                                                                 :self.zs_dim + self.zp_dims[0]]
                                 self.adatas[1].obsm['zs+zp2'] = numpy.concatenate((self.adatas[0].obsm[emb_type][:,
@@ -205,8 +217,7 @@ class SpaMV:
                                                                                    self.adatas[0].obsm[emb_type][:,
                                                                                    -self.zp_dims[1]:]), axis=1)
                             else:
-                                self.adatas[0].obsm[emb_type] = F.normalize(z[:, :self.zs_dim], p=2, eps=1e-12,
-                                                                            dim=1).detach().cpu().numpy()
+                                self.adatas[0].obsm[emb_type] = z[:, :self.zs_dim]
                                 self.adatas[0].obsm['zs+zp1'] = self.adatas[0].obsm[emb_type]
                                 self.adatas[1].obsm['zs+zp2'] = self.adatas[0].obsm[emb_type]
                             clustering(self.adatas[0], key=emb_type, add_key=emb_type, n_clusters=self.n_cluster,
@@ -223,10 +234,17 @@ class SpaMV:
                             moranI = compute_moranI(self.adatas[0], emb_type)
                             wandb.log({emb_type + " moran I": moranI}, step=self.epoch)
                             if self.result is not None:
-                                self.result.loc[len(self.result)] = [emb_type, self.epoch, scores['ari'], scores['mi'],
-                                                                     scores['nmi'], scores['ami'], scores['hom'],
-                                                                     scores['vme'], scores['average'], jaccard1,
-                                                                     jaccard2, moranI]
+                                self.result.loc[len(self.result)] = [dataname, 'SpaMV', self.epoch, scores['ari'],
+                                                                     scores['mi'], scores['nmi'], scores['ami'],
+                                                                     scores['hom'], scores['vme'], scores['average'],
+                                                                     jaccard1, jaccard2, moranI]
+                    if self.plot:
+                        self.adatas[0].obsm['SpaMV'] = self.get_embedding()
+                        clustering(self.adatas[0], key='SpaMV', add_key='SpaMV', n_clusters=self.n_cluster,
+                                   method='mclust', use_pca=True)
+                        scanpy.pl.embedding(self.adatas[0], color='SpaMV', basis='spatial', show=False)
+                        plt.tight_layout()
+                        plt.savefig('../Results/' + dataname + '/SpaMV_' + str(self.epoch) + '.pdf')
         if self.interpretable:
             zs = self.get_separate_embedding()
             for key, value in zs.items():
@@ -234,9 +252,10 @@ class SpaMV:
                 embedding(self.adatas[0], color=self.adatas[0].obs.columns, basis='spatial', ncols=5, show=False,
                           size=size, vmax='p99')
                 plt.savefig('../Results/' + dataname + '/' + key + '_stage2.pdf')
-            pbar = tqdm(range(self.epoch, self.max_epochs + self.epoch), position=0, leave=True)
+                plt.close()
+            pbar = tqdm(range(self.epoch, 600 + self.epoch), position=0, leave=True)
             self.early_stopper.min_training_loss = np.inf
-            zps = self.model.get_private_latent(self.x, self.edge_index)
+            zps = self.model.get_private_latent(self.x, self.edge_index, False)
 
             scanpy.pp.neighbors(self.adatas[0], use_rep='spatial')
             for i in range(self.n_omics):
@@ -310,15 +329,18 @@ class SpaMV:
                     wandb.log({name: (-model_site["log_prob_sum"] + entropy_term.sum()).item()}, step=self.epoch)
         if self.epoch >= self.pretrain_epoch:
             self.measurement.eval()
-            output = self.measurement(self.model.get_private_latent(self.x, self.edge_index))
+            output = self.measurement(self.model.get_private_latent(self.x, self.edge_index, True))
             for i in range(self.n_omics):
                 for j in range(self.n_omics):
                     if i != j:
                         name = "from_" + self.omics_names[i] + "_to_" + self.omics_names[j]
                         if self.interpretable:
-                            loss_measurement = output[name].std(0).sum() * 50
+                            loss_measurement = -((self.x[j].sum(1, keepdim=True) * output[name]).var(
+                                0)).mean() * model_trace.nodes[
+                                                   'recon_' + self.omics_names[i] + '_from_' + self.omics_names[i]][
+                                                   'log_prob_sum'].detach() * self.betas[i] / 10
                         else:
-                            loss_measurement = output[name].std(0).sum() * np.sqrt(output[name].shape[0])
+                            loss_measurement = output[name].std(0).sum() * self.betas[i]
                         elbo_particle -= loss_measurement
                         wandb.log({name + '_std': loss_measurement}, step=self.epoch)
         wandb.log({"Loss": -elbo_particle.item()}, step=self.epoch)
@@ -332,7 +354,6 @@ class SpaMV:
                                                         (self.x, self.edge_index), {}, detach=False)
         for name, model_site in model_trace.nodes.items():
             if model_site["type"] == "sample":
-                # if model_site["is_observed"] and model_site['name'].split('_')[1] != model_site['name'].split('_')[3]:
                 if model_site["is_observed"]:
                     elbo_particle = elbo_particle + model_site["log_prob_sum"]
                     wandb.log({name: -model_site["log_prob_sum"].item()}, step=self.epoch2)
@@ -346,11 +367,16 @@ class SpaMV:
                     omics_name = name.split("_")[1]
                     for on in self.omics_names:
                         if on != omics_name:
+                            # loss_hsic = self.HSIC(guide_site['fn'].mean,
+                            #                       guide_trace.nodes["zp_" + on]["fn"].mean.detach()[:,
+                            #                       self.meaningful_dimensions['zp_' + on]]) * self.n_obs * np.sqrt(
+                            #     max(self.data_dims)) * self.weights[self.omics_names.index(on)]
                             loss_hsic = self.HSIC(guide_site['fn'].mean,
                                                   guide_trace.nodes["zp_" + on]["fn"].mean.detach()[:,
                                                   self.meaningful_dimensions['zp_' + on]]) * self.n_obs * np.sqrt(
-                                max(self.data_dims)) * self.weights[self.omics_names.index(on)]
-                            wandb.log({"HSIC_" + omics_name + "_" + on: loss_hsic.item()}, step=self.epoch2)
+                                self.data_dims[self.omics_names.index(on)] * self.betas[self.omics_names.index(on)])
+                            wandb.log({"HSIC between zs " + omics_name + " and zp " + on: loss_hsic.item()},
+                                      step=self.epoch2)
                             elbo_particle -= loss_hsic
 
         names = list(model_trace.nodes.keys())
@@ -359,14 +385,14 @@ class SpaMV:
                 if names[i].startswith('zs') and names[j].startswith('zs'):
                     kl_zs = kl_divergence(guide_trace.nodes[names[i]]['fn'].base_dist,
                                           guide_trace.nodes[names[j]]['fn'].base_dist).sum() * \
-                            guide_trace.nodes[names[i]]['scale'] * 10
+                            guide_trace.nodes[names[i]]['scale']
                     wandb.log({"KL_" + names[i] + "_" + names[j]: kl_zs.item()}, step=self.epoch2)
                     elbo_particle -= kl_zs
         wandb.log({"Loss": -elbo_particle.item()}, step=self.epoch2)
         return -elbo_particle
 
     def get_measurement_loss(self):
-        output = self.measurement(self.model.get_private_latent(self.x, self.edge_index))
+        output = self.measurement(self.model.get_private_latent(self.x, self.edge_index, False))
         loss = 0
         for i in range(self.n_omics):
             for j in range(self.n_omics):
@@ -413,8 +439,7 @@ class SpaMV:
             spot_topic.set_index(self.adatas[0].obs_names, inplace=True)
             return spot_topic
         else:
-            # return F.normalize(z_mean, p=2, eps=1e-12, dim=1).detach().cpu().numpy()
-            return z_mean
+            return F.normalize(z_mean, p=2, eps=1e-12, dim=1).detach().cpu().numpy()
 
     def get_embedding_and_feature_by_topic(self, map=False):
         '''

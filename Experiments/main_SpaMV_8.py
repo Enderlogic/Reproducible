@@ -19,7 +19,7 @@ from Methods.SpaMV.metrics import compute_topic_coherence, compute_topic_diversi
 import scanpy as sc
 import wandb
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(device)
 
 dataset = '8_ccRCC_R114_T'
@@ -28,22 +28,28 @@ omics_names = ['Transcriptomics', "Metabolomics"]
 recon_types = ['nb', 'nb']
 
 adata_rna = sc.read_h5ad(data_folder + '/adata_RNA.h5ad')
-sc.pp.filter_genes(adata_rna, min_cells=10)
 adata_rna = adata_rna[:, (adata_rna.X > 1).sum(0) > adata_rna.n_obs / 100]
-sc.pp.filter_cells(adata_rna, min_genes=1)
+sc.pp.filter_genes(adata_rna, min_cells=10)
+sc.pp.filter_cells(adata_rna, min_counts=200)
+sc.pp.normalize_total(adata_rna)
+sc.pp.log1p(adata_rna)
+sc.pp.highly_variable_genes(adata_rna, subset=True, flavor='seurat', n_top_genes=1000)
 
-adata_pro = sc.read_h5ad(data_folder + '/adata_SM.h5ad')
-adata_pro = adata_pro[adata_pro.obs_names.intersection(adata_rna.obs_names)]
-data = [adata_rna, adata_pro]
+adata_sm = sc.read_h5ad(data_folder + '/adata_SM.h5ad')
+adata_sm = adata_sm[:, (adata_sm.X > 1).sum(0) > adata_sm.n_obs / 100]
+adata_sm = adata_sm[adata_sm.obs_names.intersection(adata_rna.obs_names)]
+sc.pp.normalize_total(adata_sm)
+sc.pp.log1p(adata_sm)
+data = [adata_rna, adata_sm]
 
 seed = random.randint(1, 10000)
 print('data: {}, seed {}'.format(dataset, seed))
-wandb.init()
+wandb.init(project=dataset)
 wandb.login()
-model = SpaMV(data, weights=[1, 10], interpretable=True, random_seed=seed, learning_rate=1e-2, dropout_prob=0,
-              neighborhood_embedding=0, recon_types=recon_types, omics_names=omics_names,
-              max_epochs=800, device=device)
-model.train(dataset, size=100)
+model = SpaMV(data, weights=[1, 1], zs_dim=15, zp_dims=[10, 10], interpretable=True, random_seed=seed,
+              learning_rate=1e-2, dropout_prob=0, neighborhood_embedding=10, recon_types=recon_types,
+              omics_names=omics_names, max_epochs=800, device=device)
+model.train(dataset, size=50)
 wandb.finish()
 zs = model.get_separate_embedding()
 for key, value in zs.items():
@@ -65,7 +71,7 @@ plt.tight_layout()
 plt.savefig('../Results/' + dataset + '/SpaMV_cluster.pdf')
 
 plot_embedding_results(data, omics_names, z, w, folder_path='../Results/' + dataset + '/',
-                       file_name='SpaMV_topics.pdf', size=150)
+                       file_name='SpaMV_topics.pdf', size=100)
 z.to_csv('../Results/' + dataset + '/SpaMV_z.csv')
 w[0].to_csv('../Results/' + dataset + '/SpaMV_w_' + omics_names[0] + '.csv')
 w[1].to_csv('../Results/' + dataset + '/SpaMV_w_' + omics_names[1] + '.csv')
