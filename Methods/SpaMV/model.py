@@ -31,7 +31,6 @@ class spamv(PyroModule):
         self.init_bg_means = init_bg_means
         self.weights = weights
         self.interpretable = interpretable
-        # self.prior = LogNormal if interpretable else Normal
         self.prior = Normal
         self.recon_types = recon_types
         self.device = device

@@ -6,9 +6,10 @@ import numpy as np
 import pyro
 import scanpy
 import scanpy.plotting
+from sklearn.metrics import adjusted_rand_score
 import torch
 import torch.nn.functional as F
-
+from torch.distributions import Normal
 import wandb
 from anndata import AnnData
 from matplotlib import pyplot as plt
@@ -19,6 +20,7 @@ from pyro.poutine import scale, trace
 from scanpy.plotting import embedding
 from scipy.sparse import issparse
 from sklearn.cluster import KMeans
+from sklearn.metrics.pairwise import cosine_similarity
 from torch.distributions.kl import kl_divergence
 from torch.nn.functional import mse_loss
 from torch.nn.utils import clip_grad_norm_
@@ -47,9 +49,9 @@ class SpaMV:
                  weights: List[float] = None, betas: List[float] = None, recon_types: List[str] = None,
                  omics_names: List[str] = None, device: torch.device = None, hidden_dim: int = None, heads: int = 1,
                  neighborhood_depth: int = 2, neighborhood_embedding: int = 10, random_seed: int = 0,
-                 max_epochs: int = 800, dropout_prob: float = .2, min_kl: float = 1, max_kl: float = 1,
+                 max_epochs: int = 600, max_epochs2: int = 600, dropout_prob: float = .2, min_kl: float = 1, max_kl: float = 1,
                  learning_rate: float = None, folder_path: str = None, early_stopping: bool = True, patience: int = 200,
-                 n_cluster: int = 10, test_mode: bool = False, result: DataFrame = None, plot: bool = False):
+                 n_cluster: int = 10, test_mode: bool = False, result: DataFrame = None, plot: bool = False, threshold_noise:int=.3, threshold_background:int=1):
         pyro.clear_param_store()
         pyro.set_rng_seed(random_seed)
         torch.manual_seed(random_seed)
@@ -92,7 +94,7 @@ class SpaMV:
         else:
             self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         if learning_rate is None:
-            learning_rate = 1e-2 if interpretable else 1e-4
+            learning_rate = 1e-2 if interpretable else 1e-3
         self.learning_rate = learning_rate
         print(self.device)
         self.hidden_dim = hidden_dim
@@ -104,9 +106,9 @@ class SpaMV:
         self.data_dims = [data.shape[1] for data in adatas]
         self.interpretable = interpretable
         self.max_epochs = max_epochs
+        self.max_epochs2 = max_epochs2
         self.min_kl = min_kl
         self.max_kl = max_kl
-        self.learning_rate = learning_rate
         self.folder_path = folder_path
         self.early_stopping = early_stopping
         self.patience = patience
@@ -114,9 +116,11 @@ class SpaMV:
         self.test_mode = test_mode
         self.result = result
         self.plot = plot
-        self.pretrain_epoch = 200
+        self.pretrain_epoch = 200 if interpretable else 10
         self.epoch = 0
         self.epoch2 = 0
+        self.threshold_noise = threshold_noise
+        self.threshold_background = threshold_background
         self.meaningful_dimensions = {}
 
         self.x = [torch.tensor(data.X.toarray() if issparse(data.X) else data.X, device=self.device, dtype=torch.float)
@@ -147,23 +151,91 @@ class SpaMV:
         for self.epoch in pbar:
             if self.epoch == self.pretrain_epoch:
                 self.early_stopper.min_training_loss = np.inf
-                if self.interpretable:
-                    zs = self.get_separate_embedding()
-                    for key, value in zs.items():
-                        self.adatas[0].obs = DataFrame(value.detach().cpu().numpy())
-                        embedding(self.adatas[0], color=self.adatas[0].obs.columns, basis='spatial', ncols=5,
-                                  show=False, size=size, vmax='p99')
-                        plt.savefig('../Results/' + dataname + '/' + key + '_stage1.pdf')
-                        plt.close()
             if self.epoch >= self.pretrain_epoch:
                 if self.epoch % 100 == 0 or self.epoch == self.pretrain_epoch:
                     n_epochs = 100
                     self.measurement = Measurement(self.zp_dims, self.hidden_dim, self.data_dims, self.recon_types,
                                                    self.omics_names, self.interpretable).to(self.device)
-                    optimizer_measurement = Adam(self.measurement.parameters(), lr=self.learning_rate, betas=(.9, .999),
-                                                 weight_decay=0)
+                    optimizer_measurement = Adam(self.measurement.parameters(), lr=1e-2 if self.interpretable else 1e-3,
+                                                 betas=(.9, .999), weight_decay=0)
+                    if self.plot and self.epoch > self.pretrain_epoch:
+                        if self.interpretable:
+                            zs = self.model.get_private_embedding(self.x, self.edge_index)
+                            i = 0
+                            for z in zs:
+                                self.adatas[0].obs = DataFrame(z.detach().cpu().numpy())
+                                embedding(self.adatas[0], color=self.adatas[0].obs.columns, basis='spatial', ncols=5,
+                                          show=False, size=size, vmax='p99')
+                                plt.savefig('../Results/' + dataname + '/' + self.omics_names[i] + '_' + str(self.epoch) + '.pdf')
+                                plt.show()
+                                plt.close()
+                                i+=1
+                        else:
+                            output = self.get_embedding()
+                            for emb_type in ['all', 'shared', 'Transcriptomics', 'Proteomics', 'Transcriptomics 2',
+                                             'Proteomics 2']:
+                                name = 'SpaMV_' + emb_type
+                                if emb_type == 'all':
+                                    self.adatas[0].obsm[name] = output
+                                    n_clusters = 10
+                                elif emb_type == 'shared':
+                                    self.adatas[0].obsm[name] = output[:, :self.zs_dim]
+                                    if '1_Simulation' in dataname:
+                                        n_clusters = 8
+                                    elif '2_Simulation' in dataname:
+                                        n_clusters = 6
+                                    elif '3_Simulation' in dataname:
+                                        n_clusters = 4
+                                    else:
+                                        raise ValueError('Unknown dataset: {}'.format(dataname))
+                                elif emb_type in ['Transcriptomics', 'Transcriptomics 2']:
+                                    if emb_type == 'Transcriptomics':
+                                        n_clusters = 10
+                                    else:
+                                        if '1_Simulation' in dataname:
+                                            n_clusters = 2
+                                        elif '2_Simulation' in dataname:
+                                            n_clusters = 3
+                                        elif '3_Simulation' in dataname:
+                                            n_clusters = 4
+                                        else:
+                                            raise ValueError('Unknown dataset: {}'.format(dataname))
+                                    self.adatas[0].obsm[name] = output[:, self.zs_dim:self.zs_dim + self.zp_dims[0]]
+                                else:
+                                    self.adatas[0].obsm[name] = output[:, self.zs_dim + self.zp_dims[0]:]
+                                    if emb_type == 'Proteomics':
+                                        n_clusters = 10
+                                    else:
+                                        if '1_Simulation' in dataname:
+                                            n_clusters = 2
+                                        elif '2_Simulation' in dataname:
+                                            n_clusters = 3
+                                        elif '3_Simulation' in dataname:
+                                            n_clusters = 4
+                                        else:
+                                            raise ValueError('Unknown dataset: {}'.format(dataname))
+                                clustering(self.adatas[0], key=name, add_key=name, n_clusters=n_clusters,
+                                           method='mclust', use_pca=True if emb_type == 'all' else False)
+                                scanpy.pp.neighbors(self.adatas[0], use_rep=name, n_neighbors=30, key_added=name)
+                            fig, ax_list = plt.subplots(2, 6, figsize=(20, 6))
+                            i = 0
+                            for emb_type in ['all', 'shared', 'Transcriptomics', 'Transcriptomics 2', 'Proteomics',
+                                             'Proteomics 2']:
+                                name = 'SpaMV_' + emb_type
+                                scanpy.tl.umap(self.adatas[0], neighbors_key=name)
+                                scanpy.pl.umap(self.adatas[0], color=name, ax=ax_list[0][i], s=30, show=False)
+                                scanpy.pl.embedding(self.adatas[0], color=name, basis='spatial', ax=ax_list[1][i], s=80,
+                                                    show=False,
+                                                    title=str(self.epoch) + '_' + name + '\nARI: {:.3f}'.format(
+                                                        adjusted_rand_score(self.adatas[0].obs['cluster'],
+                                                                            self.adatas[0].obs[
+                                                                                name])) if emb_type == 'all' else name)
+                                i += 1
+                            plt.tight_layout(w_pad=0.3)
+                            plt.show()
                 else:
-                    n_epochs = 1
+                    n_epochs = 1 if self.interpretable else 10
+                self.zp = [z.detach() for z in self.model.get_private_embedding(self.x, self.edge_index)]
                 for epoch_measurement in range(n_epochs):
                     self.measurement.train()
                     optimizer_measurement.zero_grad()
@@ -171,7 +243,7 @@ class SpaMV:
                     measurement_loss.backward()
                     clip_grad_norm_(self.measurement.parameters(), 5)
                     optimizer_measurement.step()
-
+                wandb.log({'Measurement Loss': measurement_loss.item()}, step=self.epoch)
             # train the model
             self.model.train()
             optimizer.zero_grad()
@@ -208,7 +280,7 @@ class SpaMV:
                         for emb_type in ['all']:
                             print("embedding type:", emb_type)
                             if emb_type == 'all':
-                                # self.adatas[0].obsm[emb_type] = F.normalize(z, p=2, eps=1e-12, dim=1).detach().cpu().numpy()
+                                # self.adatas[0].obsm[emb_type] = z
                                 self.adatas[0].obsm[emb_type] = z
                                 self.adatas[0].obsm['zs+zp1'] = self.adatas[0].obsm[emb_type][:,
                                                                 :self.zs_dim + self.zp_dims[0]]
@@ -225,7 +297,7 @@ class SpaMV:
                             scores = compute_supervised_scores(self.adatas[0], emb_type)
                             scores_rename = {emb_type + " " + key: value for key, value in scores.items()}
                             wandb.log(scores_rename, step=self.epoch)
-                            print("ari: ", str(scores['ari']), "\naverage: ", str(scores['average']))
+                            print("ARI: ", str(scores['ARI']), "\naverage: ", str(scores['Average']))
 
                             jaccard1 = compute_jaccard(self.adatas[0], 'zs+zp1')
                             jaccard2 = compute_jaccard(self.adatas[1], 'zs+zp2')
@@ -234,9 +306,9 @@ class SpaMV:
                             moranI = compute_moranI(self.adatas[0], emb_type)
                             wandb.log({emb_type + " moran I": moranI}, step=self.epoch)
                             if self.result is not None:
-                                self.result.loc[len(self.result)] = [dataname, 'SpaMV', self.epoch, scores['ari'],
-                                                                     scores['mi'], scores['nmi'], scores['ami'],
-                                                                     scores['hom'], scores['vme'], scores['average'],
+                                self.result.loc[len(self.result)] = [dataname, 'SpaMV', self.epoch, scores['ARI'],
+                                                                     scores['MI'], scores['NMI'], scores['AMI'],
+                                                                     scores['HOM'], scores['VME'], scores['Average'],
                                                                      jaccard1, jaccard2, moranI]
                     if self.plot:
                         self.adatas[0].obsm['SpaMV'] = self.get_embedding()
@@ -246,14 +318,7 @@ class SpaMV:
                         plt.tight_layout()
                         plt.savefig('../Results/' + dataname + '/SpaMV_' + str(self.epoch) + '.pdf')
         if self.interpretable:
-            zs = self.get_separate_embedding()
-            for key, value in zs.items():
-                self.adatas[0].obs = DataFrame(value.detach().cpu().numpy())
-                embedding(self.adatas[0], color=self.adatas[0].obs.columns, basis='spatial', ncols=5, show=False,
-                          size=size, vmax='p99')
-                plt.savefig('../Results/' + dataname + '/' + key + '_stage2.pdf')
-                plt.close()
-            pbar = tqdm(range(self.epoch, 600 + self.epoch), position=0, leave=True)
+            pbar = tqdm(range(self.epoch, self.max_epochs2 + self.epoch), position=0, leave=True)
             self.early_stopper.min_training_loss = np.inf
             zps = self.model.get_private_latent(self.x, self.edge_index, False)
 
@@ -261,6 +326,15 @@ class SpaMV:
             for i in range(self.n_omics):
                 self.meaningful_dimensions['zp_' + self.omics_names[i]] = self.get_meaningful_dimensions(zps[i])
             for self.epoch2 in pbar:
+                if self.plot and self.epoch2 % 100 == 0 and self.epoch2 > 0:
+                    if self.interpretable:
+                        zs = self.get_separate_embedding()
+                        for key, value in zs.items():
+                            self.adatas[0].obs = DataFrame(value.exp().detach().cpu().numpy())
+                            embedding(self.adatas[0], color=self.adatas[0].obs.columns, basis='spatial', ncols=5,
+                                      show=False, size=size, vmax='p99')
+                            plt.savefig('../Results/' + dataname + '/' + key + '_' + str(self.epoch2) + '.pdf')
+                            plt.close()
                 # train shared model
                 self.model.train()
                 optimizer_zs.zero_grad()
@@ -285,14 +359,29 @@ class SpaMV:
         return kl
 
     def get_meaningful_dimensions(self, z):
+        # prune noisy dimensions
         self.adatas[0].obsm['z'] = z.detach().cpu().numpy()
         morans_i = scanpy.metrics.morans_i(self.adatas[0], obsm='z')
-        if morans_i.min() < .3:
+        if morans_i.min() < self.threshold_noise:
             kmeans = KMeans(n_clusters=2)
             kmeans.fit(morans_i.reshape(-1, 1))
-            return np.where(kmeans.labels_ == np.argmax(kmeans.cluster_centers_))[0]
+            z_pruned = np.where(kmeans.labels_ == np.argmax(kmeans.cluster_centers_))[0]
         else:
-            return np.array(range(z.shape[1]))
+            z_pruned = np.array(range(z.shape[1]))
+
+        # prune background dimensions
+        z_exp_std = torch.exp(z[:, z_pruned]).std(0)
+        z_pruned = z_pruned[z_exp_std.detach().cpu().numpy() > self.threshold_background]
+        # print(z_exp_std)
+        # self.adatas[0].obsm['z'] = z[:, z_pruned].exp().detach().cpu().numpy()
+        # morans_i = scanpy.metrics.morans_i(self.adatas[0], obsm='z')
+        # print(morans_i)
+        # if z_exp_std.min() < self.threshold_background and len(z_pruned) > 1:
+        #     kmeans = KMeans(n_clusters=2)
+        #     kmeans.fit(F.softmax(z_exp_std).detach().cpu().numpy().reshape(-1, 1))
+        #     z_pruned = z_pruned[np.where(kmeans.labels_ == np.argmax(kmeans.cluster_centers_))[0]]
+
+        return z_pruned
 
     def _kl_weight2(self):
         kl = self.min_kl + (self.epoch2 - self.epoch) / self.max_epochs * (self.max_kl - self.min_kl)
@@ -330,17 +419,24 @@ class SpaMV:
         if self.epoch >= self.pretrain_epoch:
             self.measurement.eval()
             output = self.measurement(self.model.get_private_latent(self.x, self.edge_index, True))
+            # output = self.measurement(self.model.get_private_embedding(self.x, self.edge_index))
             for i in range(self.n_omics):
                 for j in range(self.n_omics):
                     if i != j:
                         name = "from_" + self.omics_names[i] + "_to_" + self.omics_names[j]
                         if self.interpretable:
-                            loss_measurement = -((self.x[j].sum(1, keepdim=True) * output[name]).var(
-                                0)).mean() * model_trace.nodes[
-                                                   'recon_' + self.omics_names[i] + '_from_' + self.omics_names[i]][
-                                                   'log_prob_sum'].detach() * self.betas[i] / 10
+                            # loss_measurement = -((self.x[j].sum(1, keepdim=True) * output[name]).var(0)).mean() * model_trace.nodes[
+                            #                        'recon_' + self.omics_names[i] + '_from_' + self.omics_names[i]][
+                            #                        'log_prob_sum'].detach() * self.betas[i] / 10
+                            loss_measurement = output[name].std(0).sum() * self.data_dims[i] / min(self.data_dims) * self.weights[i] * self.betas[i]
+                            # loss_measurement = -output[name].std(0).sum() * model_trace.nodes['recon_' + self.omics_names[i] + '_from_' + self.omics_names[i]]['log_prob_sum'].detach() * self.betas[i] / 10
+                            # loss_measurement = ((self.x[j].sum(1, keepdim=True) * output[name]).std(0) * self.x[j].std(0) / self.x[j].std(0).sum()).sum() * self.betas[i]
                         else:
-                            loss_measurement = output[name].std(0).sum() * self.betas[i]
+                            # loss_measurement = -output[name].var(0).mean() * model_trace.nodes[
+                            #                        'recon_' + self.omics_names[i] + '_from_' + self.omics_names[i]][
+                            #                        'log_prob_sum'].detach() * self.betas[i] / 10
+                            loss_measurement = (output[name].std(0) * self.x[j].std(0) / self.x[j].std(0).sum()).sum() * \
+                                               self.x[i].std(0).mean() * self.weights[i] * self.betas[i]
                         elbo_particle -= loss_measurement
                         wandb.log({name + '_std': loss_measurement}, step=self.epoch)
         wandb.log({"Loss": -elbo_particle.item()}, step=self.epoch)
@@ -373,26 +469,32 @@ class SpaMV:
                             #     max(self.data_dims)) * self.weights[self.omics_names.index(on)]
                             loss_hsic = self.HSIC(guide_site['fn'].mean,
                                                   guide_trace.nodes["zp_" + on]["fn"].mean.detach()[:,
-                                                  self.meaningful_dimensions['zp_' + on]]) * self.n_obs * np.sqrt(
-                                self.data_dims[self.omics_names.index(on)] * self.betas[self.omics_names.index(on)])
+                                                  self.meaningful_dimensions['zp_' + on]]) * self.n_obs * \
+                                        np.sqrt(self.data_dims[self.omics_names.index(on)])
+                            # loss_hsic = self.HSIC(guide_site['value'],
+                            #                       guide_trace.nodes["zp_" + on]["value"].detach()[:,
+                            #                       self.meaningful_dimensions['zp_' + on]]) * self.n_obs * self.data_dims[self.omics_names.index(on)]
                             wandb.log({"HSIC between zs " + omics_name + " and zp " + on: loss_hsic.item()},
                                       step=self.epoch2)
                             elbo_particle -= loss_hsic
 
-        names = list(model_trace.nodes.keys())
-        for i in range(len(names)):
-            for j in range(i + 1, len(names)):
-                if names[i].startswith('zs') and names[j].startswith('zs'):
-                    kl_zs = kl_divergence(guide_trace.nodes[names[i]]['fn'].base_dist,
-                                          guide_trace.nodes[names[j]]['fn'].base_dist).sum() * \
-                            guide_trace.nodes[names[i]]['scale']
-                    wandb.log({"KL_" + names[i] + "_" + names[j]: kl_zs.item()}, step=self.epoch2)
-                    elbo_particle -= kl_zs
+        # names = list(model_trace.nodes.keys())
+        # for i in range(len(names)):
+        #     for j in range(i + 1, len(names)):
+        #         if names[i].startswith('zs') and names[j].startswith('zs'):
+        #             kl_zs = kl_divergence(guide_trace.nodes[names[i]]['fn'].base_dist,
+        #                                   guide_trace.nodes[names[j]]['fn'].base_dist).sum() * \
+        #                     guide_trace.nodes[names[i]]['scale']
+        #             wandb.log({"KL_" + names[i] + "_" + names[j]: kl_zs.item()}, step=self.epoch2)
+        #             elbo_particle -= kl_zs
         wandb.log({"Loss": -elbo_particle.item()}, step=self.epoch2)
         return -elbo_particle
 
     def get_measurement_loss(self):
-        output = self.measurement(self.model.get_private_latent(self.x, self.edge_index, False))
+        zp = [z.detach() if self.interpretable else z.detach() for z in
+              self.model.get_private_latent(self.x, self.edge_index, False)]
+        output = self.measurement(zp)
+        # output = self.measurement(self.model.get_private_latent(self.x, self.edge_index, False))
         loss = 0
         for i in range(self.n_omics):
             for j in range(self.n_omics):
@@ -401,12 +503,13 @@ class SpaMV:
                     if self.interpretable:
                         # output[name] = output[name] / output[name].sum(1, keepdim=True)
                         # loss += mse_loss(output[name], self.x[j].div(self.x[j].sum(1, keepdim=True))) * \
-                        #         output[name].shape[0] * output[name].shape[1]
-                        # output[name] = self.x[j].sum(1, keepdim=True) * output[name] / output[name].sum(1, keepdim=True)
+                        # output[name].shape[0] * output[name].shape[1]
+                        # output[name] = self.x[j].sum(1, keepdim=True) * output[name]
                         output[name] = self.x[j].sum(1, keepdim=True) * output[name]
-                        loss += mse_loss(output[name], self.x[j])
+                        loss += mse_loss(output[name], self.x[j]) * self.n_obs
                     else:
-                        loss += mse_loss(output[name], self.x[j])
+                        # loss = -Normal(output[name], getattr(self.model, 'disp_' + self.omics_names[j]).detach().exp()).log_prob(self.x[j]).sum() / self.n_obs
+                        loss += mse_loss(output[name], self.x[j]) * np.sqrt(self.n_obs)
         return loss
 
     def save(self, path):
@@ -439,7 +542,8 @@ class SpaMV:
             spot_topic.set_index(self.adatas[0].obs_names, inplace=True)
             return spot_topic
         else:
-            return F.normalize(z_mean, p=2, eps=1e-12, dim=1).detach().cpu().numpy()
+            # return z_mean.detach().cpu().numpy()
+            return F.normalize(z_mean).detach().cpu().numpy()
 
     def get_embedding_and_feature_by_topic(self, map=False):
         '''
@@ -474,7 +578,7 @@ class SpaMV:
             raise Exception("This function can only be used with interpretable mode.")
 
     def merge_and_prune(self, spot_topic, feature_topic):
-        # prune noisy topics
+        # prune noisy topics and background topics
         meaningful_topics = ["Shared topic {}".format(i + 1) for i in self.meaningful_dimensions['zs']]
         for i in range(self.n_omics):
             meaningful_topics += [self.omics_names[i] + " private topic {}".format(j + 1) for j in
@@ -483,6 +587,35 @@ class SpaMV:
         for i in range(self.n_omics):
             existing_topics = [col for col in meaningful_topics if col in feature_topic[i].columns]
             feature_topic[i] = feature_topic[i][existing_topics]
+
+        # merge similar topics
+        # merge = True
+        # while merge:
+        #     merge = False
+        #     for topic_i in spot_topic.columns:
+        #         for topic_j in spot_topic.columns:
+        #             if topic_i != topic_j and topic_i.split(' ')[0] == topic_j.split(' ')[0]:
+        #                 on = topic_i.split(' ')[0]
+        #                 if on == 'Shared':
+        #                     cs = 0
+        #                     for ft in feature_topic:
+        #                         cs += cosine_similarity(ft[topic_i].values.reshape(1, -1), ft[topic_j].values.reshape(1, -1)) / self.n_omics
+        #                 else:
+        #                     cs = cosine_similarity(feature_topic[self.omics_names.index(on)][topic_i].values.reshape(1, -1), feature_topic[self.omics_names.index(on)][topic_j].values.reshape(1, -1))
+        #                 if cs > .7:
+        #                     print('merge', topic_i, 'and', topic_j)
+        #                     spot_topic.loc[:, topic_i] = (spot_topic[topic_i] + spot_topic[topic_j]) / 2
+        #                     spot_topic = spot_topic.drop(columns = topic_j)
+        #                     for i in range(len(feature_topic)):
+        #                         if topic_i in feature_topic[i].columns:
+        #                             feature_topic[i].loc[:, topic_i] = (feature_topic[i][topic_i] + feature_topic[i][topic_j]) / 2
+        #                             feature_topic[i] = feature_topic[i].drop(columns=topic_j)
+        #                     merge = True
+        #                     break
+        #         if merge:
+        #             break
+        #     if not merge:
+        #         break
         return spot_topic, feature_topic
 
 

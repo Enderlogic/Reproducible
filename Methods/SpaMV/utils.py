@@ -17,8 +17,6 @@ from scipy.sparse import csr_matrix, issparse
 from sklearn.neighbors import kneighbors_graph
 from torch_geometric.utils import coalesce
 
-sc.set_figure_params(scanpy=True, fontsize=20)
-
 
 def construct_graph_by_coordinate(cell_position, neighborhood_depth=3, device='cpu'):
     '''
@@ -245,7 +243,7 @@ def ST_preprocess(adata_st, normalize=True, log=True, prune=False, highly_variab
 
     if normalize:
         sc.pp.normalize_total(adata, target_sum=1e4)
-
+        # sc.pp.normalize_total(adata)
     if log:
         sc.pp.log1p(adata)
 
