@@ -12,10 +12,11 @@ from matplotlib import pyplot as plt, ticker
 from natsort import natsorted
 from numpy.linalg import norm
 from pandas import DataFrame
-from scanpy.plotting import embedding
+from scanpy.plotting import embedding, spatial
 from scipy.sparse import csr_matrix, issparse
 from sklearn.neighbors import kneighbors_graph
 from torch_geometric.utils import coalesce
+from squidpy.pl import spatial_scatter
 
 
 def construct_graph_by_coordinate(cell_position, neighborhood_depth=3, device='cpu'):
@@ -78,8 +79,12 @@ def get_init_bg(x):
     return bg_init
 
 
+def remove_box(ax):
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+        
 def plot_embedding_results(adatas, omics_names, topic_abundance, feature_topics, save=True, folder_path=None,
-                           file_name=None, show=False, full=False, corresponding_features=True, size=350):
+                           file_name=None, show=False, full=False, corresponding_features=True, size=350, crop_coord=None, rb=True):
     element_names = []
     for omics_name in omics_names:
         if omics_name == "Transcriptomics" or "H3K27" in omics_name:
@@ -111,29 +116,46 @@ def plot_embedding_results(adatas, omics_names, topic_abundance, feature_topics,
     adatas[1].obs[topic_abundance.columns] = topic_abundance
     for i in range(zs_dim):
         topic_name = topic_abundance.columns[i]
-        embedding(adatas[0], color=topic_name, vmax='p99', size=size, show=False, basis='spatial', ax=axes[0, i])
+        if 'spatial' not in adatas[0].uns:
+            embedding(adatas[0], color=topic_name, vmax='p99', size=size, show=False, basis='spatial', ax=axes[0, i])
+        else:
+            spatial_scatter(adatas[0], color=topic_name, ax=axes[0, i], crop_coord=crop_coord)
         if corresponding_features:
             for j in range(n_omics):
                 mrf = feature_topics[j].nlargest(1, topic_name).index[0]
-                embedding(adatas[j], color=mrf, vmax='p99', basis='spatial', size=size, cmap='coolwarm', show=False,
-                          ax=axes[1 + j, i],
-                          title=mrf + '\nMost relevant ' + element_names[j] + '\nw.r.t. ' + topic_name)
+                if 'spatial' not in adatas[j].uns:
+                    embedding(adatas[j], color=mrf, vmax='p99', basis='spatial', size=size, cmap='coolwarm', show=False,
+                            ax=axes[1 + j, i],
+                            title=mrf + '\nMost relevant ' + element_names[j] + '\nw.r.t. ' + topic_name)
+                else:
+                    # spatial(adatas[j], color=mrf, vmax='p99', cmap='coolwarm', show=False, ax=axes[1 + j, i], title=mrf + '\nMost relevant ' + element_names[j] + '\nw.r.t. ' + topic_name)
+                    spatial_scatter(adatas[j], color=mrf, ax=axes[1 + j, i], cmap='coolwarm', crop_coord=crop_coord, title=mrf + '\nMost relevant ' + element_names[j] + '\nw.r.t. ' + topic_name)
     for i in range(zs_dim):
         for j in range(n_omics + 1 if corresponding_features else 1):
             axes[j, i].set_xlabel('')  # Remove x-axis label
             axes[j, i].set_ylabel('')  # Remove y-axis label
             axes[j, i].set_xticks([])  # Remove x-axis ticks
             axes[j, i].set_yticks([])  # Remove y-axis ticks
+            if rb:
+                remove_box(axes[j, i])
     for i in range(n_omics):
         for j in range(zp_dims[i]):
             topic_name = feature_topics[i].columns[zs_dim + j]
-            embedding(adatas[0], color=topic_name, vmax='p99', size=size, show=False, basis='spatial',
-                      ax=axes[1 + n_omics + i * n_omics if corresponding_features else 1 + i, j])
+            if 'spatial' not in adatas[0].uns: 
+                embedding(adatas[0], color=topic_name, vmax='p99', size=size, show=False, basis='spatial',
+                        ax=axes[1 + n_omics + i * n_omics if corresponding_features else 1 + i, j])
+            else:
+                # spatial(adatas[0], color=topic_name, vmax='p99', show=False, ax=axes[1 + n_omics + i * n_omics if corresponding_features else 1 + i, j])
+                spatial_scatter(adatas[0], color=topic_name, ax=axes[1 + n_omics + i * n_omics if corresponding_features else 1 + i, j], crop_coord=crop_coord)
             if corresponding_features:
                 mrf = feature_topics[i].nlargest(1, topic_name).index[0]
-                embedding(adatas[i], color=mrf, vmax='p99', size=size, show=False, cmap='coolwarm', basis='spatial',
-                          title=mrf + '\nMost relevant ' + element_names[i] + '\nw.r.t. ' + topic_name,
-                          ax=axes[1 + n_omics + i * n_omics + 1, j])
+                if 'spatial' not in adatas[i].uns:
+                    embedding(adatas[i], color=mrf, vmax='p99', size=size, show=False, cmap='coolwarm', basis='spatial',
+                            title=mrf + '\nMost relevant ' + element_names[i] + '\nw.r.t. ' + topic_name,
+                            ax=axes[1 + n_omics + i * n_omics + 1, j])
+                else:
+                    # spatial(adatas[i], color=mrf, vmax='p99', cmap='coolwarm', show=False, ax=axes[1 + n_omics + i * n_omics + 1, j], title=mrf + '\nMost relevant ' + element_names[i] + '\nw.r.t. ' + topic_name)
+                    spatial_scatter(adatas[i], color=mrf, cmap='coolwarm', ax=axes[1 + n_omics + i * n_omics + 1, j], crop_coord=crop_coord, title=mrf + '\nMost relevant ' + element_names[i] + '\nw.r.t. ' + topic_name)
     for i in range(n_omics):
         for j in range(zp_dims[i]):
             if corresponding_features:
@@ -142,11 +164,15 @@ def plot_embedding_results(adatas, omics_names, topic_abundance, feature_topics,
                     axes[1 + n_omics * (i + 1) + k, j].set_ylabel('')
                     axes[1 + n_omics * (i + 1) + k, j].set_xticks([])
                     axes[1 + n_omics * (i + 1) + k, j].set_yticks([])
+                    if rb:
+                        remove_box(axes[1 + n_omics * (i + 1) + k, j])
             else:
                 axes[1 + i, j].set_xlabel('')
                 axes[1 + i, j].set_ylabel('')
                 axes[1 + i, j].set_xticks([])
                 axes[1 + i, j].set_yticks([])
+                if rb:
+                    remove_box(axes[1 + i, j])
     plt.tight_layout()
     if save:
         if not os.path.exists(folder_path):
@@ -220,8 +246,7 @@ def plot_clustering_results(adata, cluster_name, omics_names, folder_path, show=
             plt.show()
 
 
-def ST_preprocess(adata_st, normalize=True, log=True, prune=False, highly_variable_genes=True, flavor="seurat_v3",
-                  n_top_genes=3000, pca=False, n_comps=50, scale=True):
+def ST_preprocess(adata_st, normalize=True, log=True, prune=False, highly_variable_genes=True, n_top_genes=3000, pca=False, n_comps=50, scale=True):
     adata = adata_st.copy()
     if adata.n_vars > 50000:
         sc.pp.filter_genes(adata, min_cells=round(adata.n_obs * .05))
@@ -239,11 +264,10 @@ def ST_preprocess(adata_st, normalize=True, log=True, prune=False, highly_variab
         adata = adata[:, (adata.X > 1).sum(0) > adata.n_obs / 100]
 
     if highly_variable_genes:
-        sc.pp.highly_variable_genes(adata, flavor=flavor, n_top_genes=n_top_genes)
-
+        sc.pp.highly_variable_genes(adata, flavor='seurat_v3', n_top_genes=n_top_genes, subset=False)
+        
     if normalize:
         sc.pp.normalize_total(adata, target_sum=1e4)
-        # sc.pp.normalize_total(adata)
     if log:
         sc.pp.log1p(adata)
 

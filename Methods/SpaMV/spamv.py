@@ -1,6 +1,6 @@
 """Main module."""
 from typing import List
-
+import rbo
 import numpy
 import numpy as np
 import pyro
@@ -49,7 +49,7 @@ class SpaMV:
                  weights: List[float] = None, betas: List[float] = None, recon_types: List[str] = None,
                  omics_names: List[str] = None, device: torch.device = None, hidden_dim: int = None, heads: int = 1,
                  neighborhood_depth: int = 2, neighborhood_embedding: int = 10, random_seed: int = 0,
-                 max_epochs: int = 600, max_epochs2: int = 600, dropout_prob: float = .2, min_kl: float = 1, max_kl: float = 1,
+                 max_epochs: int = 400, max_epochs2: int = 400, dropout_prob: float = .2, min_kl: float = 1, max_kl: float = 1,
                  learning_rate: float = None, folder_path: str = None, early_stopping: bool = True, patience: int = 200,
                  n_cluster: int = 10, test_mode: bool = False, result: DataFrame = None, plot: bool = False, threshold_noise:int=.3, threshold_background:int=1):
         pyro.clear_param_store()
@@ -57,47 +57,53 @@ class SpaMV:
         torch.manual_seed(random_seed)
         self.n_omics = len(adatas)
         if zs_dim is None:
-            zs_dim = 10 if interpretable else 32
+            self.zs_dim = 10 if interpretable else 32
         elif zs_dim <= 0:
             raise ValueError("zs_dim must be a positive integer")
-        self.zs_dim = zs_dim
+        else:
+            self.zs_dim = zs_dim
         if zp_dims is None:
-            zp_dims = [10 if interpretable else 32 for _ in range(self.n_omics)]
+            self.zp_dims = [10 if interpretable else 32 for _ in range(self.n_omics)]
         elif min(zp_dims) < 0:
             raise ValueError("all elements in zp_dims must be non-negative integers")
-        self.zp_dims = zp_dims
+        else:
+            self.zp_dims = zp_dims
         if weights is None:
-            weights = [1 for _ in range(self.n_omics)]
+            self.weights = [1 for _ in range(self.n_omics)]
         elif min(weights) < 0:
             raise ValueError("all elements in weights must be non-negative")
-        self.weights = weights
+        else:
+            self.weights = weights
         if betas is None:
-            betas = [1 for _ in range(self.n_omics)]
+            self.betas = [1 for _ in range(self.n_omics)]
         elif min(betas) < 0:
             raise ValueError("all elements in betas must be non-negative")
-        self.betas = betas
+        else:
+            self.betas = betas
         if recon_types is None:
             recon_types = ["nb" for _ in range(self.n_omics)] if interpretable else ["gauss", "gauss"]
         else:
             for recon_type in recon_types:
                 if recon_type not in ['zinb', 'nb', 'gauss']:
                     raise ValueError("recon_type must be 'nb' or 'zinb' or 'gauss'")
+
         self.recon_types = recon_types
         if hidden_dim is None:
-            hidden_dim = 128 if interpretable else 256
+            self.hidden_dim = 128 if interpretable else 256
         elif hidden_dim <= 0:
             raise ValueError("hidden_dim must be a positive integer")
-        self.hidden_dim = hidden_dim
+        else:
+            self.hidden_dim = hidden_dim
         self.omics_names = ["omics_{}".format(i) for i in range(self.n_omics)] if omics_names is None else omics_names
         if device:
             self.device = device
         else:
             self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         if learning_rate is None:
-            learning_rate = 1e-2 if interpretable else 1e-3
-        self.learning_rate = learning_rate
+            self.learning_rate = 1e-2 if interpretable else 1e-3
+        else:
+            self.learning_rate = learning_rate
         print(self.device)
-        self.hidden_dim = hidden_dim
         self.heads = heads
         self.neighborhood_depth = neighborhood_depth
         self.neighborhood_embedding = neighborhood_embedding
@@ -128,7 +134,7 @@ class SpaMV:
         self.edge_index = adjacent_matrix_preprocessing(adatas, neighborhood_depth, neighborhood_embedding, self.device)
 
         self.init_bg_means = get_init_bg(self.x) if interpretable else None
-        self.model = spamv(self.data_dims, zs_dim, zp_dims, self.init_bg_means, weights, hidden_dim, recon_types,
+        self.model = spamv(self.data_dims, self.zs_dim, self.zp_dims, self.init_bg_means, self.weights, self.hidden_dim, self.recon_types,
                            heads, interpretable, self.device, self.omics_names, dropout_prob)
 
     def train(self, dataname=None, size=200):
@@ -260,7 +266,7 @@ class SpaMV:
 
             if (self.epoch + 1) % 200 == 0 and self.test_mode:
                 if self.interpretable:
-                    z, w = self.get_embedding_and_feature_by_topic(map=False)
+                    z, w = self.get_embedding_and_feature_by_topic(merge=False)
                     if self.result is not None:
                         self.result.loc[len(self.result)] = [dataname, 'SpaMV', self.epoch,
                                                              compute_topic_coherence(self.adatas[0], w[0],
@@ -484,7 +490,7 @@ class SpaMV:
         #         if names[i].startswith('zs') and names[j].startswith('zs'):
         #             kl_zs = kl_divergence(guide_trace.nodes[names[i]]['fn'].base_dist,
         #                                   guide_trace.nodes[names[j]]['fn'].base_dist).sum() * \
-        #                     guide_trace.nodes[names[i]]['scale']
+        #                     guide_trace.nodes[names[i]]['scale'] * 10
         #             wandb.log({"KL_" + names[i] + "_" + names[j]: kl_zs.item()}, step=self.epoch2)
         #             elbo_particle -= kl_zs
         wandb.log({"Loss": -elbo_particle.item()}, step=self.epoch2)
@@ -545,7 +551,7 @@ class SpaMV:
             # return z_mean.detach().cpu().numpy()
             return F.normalize(z_mean).detach().cpu().numpy()
 
-    def get_embedding_and_feature_by_topic(self, map=False):
+    def get_embedding_and_feature_by_topic(self, merge=False):
         '''
         This function is used to get the feature by topic. The returned list contains feature by topic for each modality
         according to their input order. The row names in the returned dataframes are the feature names in the
@@ -565,57 +571,67 @@ class SpaMV:
                                  range(self.zp_dims[i])]
             spot_topic = DataFrame(z_mean.detach().cpu().numpy(), columns=columns_name)
             spot_topic.set_index(self.adatas[0].obs_names, inplace=True)
-            feature_topics = self.model.get_feature_by_topic()
+            feature_topic = self.model.get_feature_by_topic()
             for i in range(len(self.zp_dims)):
-                feature_topics[i] = DataFrame(feature_topics[i],
+                feature_topic[i] = DataFrame(feature_topic[i],
                                               columns=["Shared topic {}".format(j + 1) for j in range(self.zs_dim)] + [
                                                   self.omics_names[i] + " private topic {}".format(j + 1) for j in
                                                   range(self.zp_dims[i])], index=self.adatas[i].var_names)
-            if map:
-                spot_topic, feature_topics = self.merge_and_prune(spot_topic, feature_topics)
-            return spot_topic, feature_topics
+            
+            # prune noisy topics and background topics
+            meaningful_topics = ["Shared topic {}".format(i + 1) for i in self.meaningful_dimensions['zs']]
+            for i in range(self.n_omics):
+                meaningful_topics += [self.omics_names[i] + " private topic {}".format(j + 1) for j in
+                                    self.meaningful_dimensions['zp_' + self.omics_names[i]]]
+            spot_topic = spot_topic[meaningful_topics]
+            for i in range(self.n_omics):
+                existing_topics = [col for col in meaningful_topics if col in feature_topic[i].columns]
+                feature_topic[i] = feature_topic[i][existing_topics]
+                
+            if merge:
+                spot_topic, feature_topic = self.merge(spot_topic, feature_topic)
+            return spot_topic, feature_topic
         else:
             raise Exception("This function can only be used with interpretable mode.")
 
-    def merge_and_prune(self, spot_topic, feature_topic):
-        # prune noisy topics and background topics
-        meaningful_topics = ["Shared topic {}".format(i + 1) for i in self.meaningful_dimensions['zs']]
+    def merge(self, spot_topic, feature_topic, threshold=.4):
+        # merge topics with similar features
+        topks = []
         for i in range(self.n_omics):
-            meaningful_topics += [self.omics_names[i] + " private topic {}".format(j + 1) for j in
-                                  self.meaningful_dimensions['zp_' + self.omics_names[i]]]
-        spot_topic = spot_topic[meaningful_topics]
-        for i in range(self.n_omics):
-            existing_topics = [col for col in meaningful_topics if col in feature_topic[i].columns]
-            feature_topic[i] = feature_topic[i][existing_topics]
-
-        # merge similar topics
-        # merge = True
-        # while merge:
-        #     merge = False
-        #     for topic_i in spot_topic.columns:
-        #         for topic_j in spot_topic.columns:
-        #             if topic_i != topic_j and topic_i.split(' ')[0] == topic_j.split(' ')[0]:
-        #                 on = topic_i.split(' ')[0]
-        #                 if on == 'Shared':
-        #                     cs = 0
-        #                     for ft in feature_topic:
-        #                         cs += cosine_similarity(ft[topic_i].values.reshape(1, -1), ft[topic_j].values.reshape(1, -1)) / self.n_omics
-        #                 else:
-        #                     cs = cosine_similarity(feature_topic[self.omics_names.index(on)][topic_i].values.reshape(1, -1), feature_topic[self.omics_names.index(on)][topic_j].values.reshape(1, -1))
-        #                 if cs > .7:
-        #                     print('merge', topic_i, 'and', topic_j)
-        #                     spot_topic.loc[:, topic_i] = (spot_topic[topic_i] + spot_topic[topic_j]) / 2
-        #                     spot_topic = spot_topic.drop(columns = topic_j)
-        #                     for i in range(len(feature_topic)):
-        #                         if topic_i in feature_topic[i].columns:
-        #                             feature_topic[i].loc[:, topic_i] = (feature_topic[i][topic_i] + feature_topic[i][topic_j]) / 2
-        #                             feature_topic[i] = feature_topic[i].drop(columns=topic_j)
-        #                     merge = True
-        #                     break
-        #         if merge:
-        #             break
-        #     if not merge:
-        #         break
+            if self.data_dims[i] < 200:
+                topks.append(5)
+            else:
+                topks.append(50)
+        merge = True
+        while merge:
+            merge = False
+            for topic_i in spot_topic.columns:
+                for topic_j in spot_topic.columns:
+                    if spot_topic.columns.get_loc(topic_j) > spot_topic.columns.get_loc(topic_i) and topic_i.split(' ')[0] == topic_j.split(' ')[0]:
+                        on = topic_i.split(' ')[0]
+                        if on == 'Shared':
+                            # sim = min([cosine_similarity(ft[topic_i].values.reshape(1, -1), ft[topic_j].values.reshape(1, -1)) for ft in feature_topic])
+                            sim = min([rbo.RankingSimilarity(feature_topic[i].nlargest(topks[i], topic_i).index.tolist(), feature_topic[i].nlargest(topks[i], topic_j).index.tolist()).rbo() for i in range(self.n_omics)])
+                        else:
+                            # sim = cosine_similarity(feature_topic[self.omics_names.index(on)][topic_i].values.reshape(1, -1), feature_topic[self.omics_names.index(on)][topic_j].values.reshape(1, -1))
+                            sim = rbo.RankingSimilarity(feature_topic[self.omics_names.index(on)].nlargest(topks[self.omics_names.index(on)], topic_i).index.tolist(), feature_topic[self.omics_names.index(on)].nlargest(topks[self.omics_names.index(on)], topic_j).index.tolist()).rbo()
+                        if sim > threshold:
+                            # li = feature_topic[0].nlargest(50, topic_i).index.tolist()
+                            # lj = feature_topic[0].nlargest(50, topic_j).index.tolist()
+                            # r = rbo.RankingSimilarity(li, lj).rbo()
+                            print('merge', topic_i, 'and', topic_j)
+                            spot_topic.loc[:, topic_i] = (spot_topic[topic_i] + spot_topic[topic_j]) / 2
+                            spot_topic = spot_topic.drop(columns = topic_j)
+                            for i in range(len(feature_topic)):
+                                if topic_i in feature_topic[i].columns:
+                                    feature_topic[i].loc[:, topic_i] = (feature_topic[i][topic_i] + feature_topic[i][topic_j]) / 2
+                                    feature_topic[i] = feature_topic[i].drop(columns=topic_j)
+                            merge = True
+                            break
+                if merge:
+                    break
+            if not merge:
+                break
         return spot_topic, feature_topic
 
 

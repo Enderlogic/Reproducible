@@ -31,12 +31,10 @@ def compute_supervised_scores(adata, learned_cluster_name):
                 "Average": (ari + mi + nmi + ami + hom + vme) / 6}
 
 
-def compute_jaccard(adata, key, k=50):
+def compute_jaccard(adata, key, k=50, use_rep='X_pca'):
     sc.pp.neighbors(adata, use_rep=key, key_added=key, n_neighbors=k)
-    if 'X_pca' in adata.obsm:
-        sc.pp.neighbors(adata, use_rep='X_pca', key_added='X', n_neighbors=k)
-    elif 'X_lsi' in adata.obsm:
-        sc.pp.neighbors(adata, use_rep='X_lsi', key_added='X', n_neighbors=k)
+    if use_rep in adata.obsm:
+        sc.pp.neighbors(adata, use_rep=use_rep, key_added='X', n_neighbors=k)
     else:
         sc.pp.neighbors(adata, use_rep='X', key_added='X', n_neighbors=k)
     jaccard = ((adata.obsp[key + '_distances'].toarray() * adata.obsp['X_distances'].toarray() > 0).sum(1) / (
