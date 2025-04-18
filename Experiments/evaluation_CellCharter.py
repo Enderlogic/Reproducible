@@ -7,7 +7,6 @@ import cellcharter as cc
 import pandas
 import sys
 sys.path.append('/home/makx/Reproducible-main')
-from Methods.SpaMV.utils import pca, clr_normalize_each_cell, ST_preprocess
 from Methods.SpaMV.metrics import compute_moranI, compute_jaccard, compute_supervised_scores
 import scvi
 import matplotlib as mpl
@@ -35,23 +34,23 @@ early_stopping_kwargs = {
     "lr_factor": 0.1,
 }
 
-
-for dataset in ['4_Human_Lymph_Node','5_Mouse_Brain']:
+# '4_Human_Lymph_Node','5_Mouse_Brain','6_Mouse_Embryo'
+for dataset in ['4_Human_Lymph_Node','6_Mouse_Embryo']:
     data_omics1 = sc.read_h5ad('Dataset/' + dataset + '/adata_RNA.h5ad')
-    sc.pp.filter_genes(data_omics1, min_counts=3)
+    # sc.pp.filter_genes(data_omics1, min_counts=3)
     data_omics1.layers["counts"] = data_omics1.X.copy()  # preserve counts
-    sc.pp.normalize_total(data_omics1, target_sum=1e4)
-    sc.pp.log1p(data_omics1)
-    data_omics1 = ST_preprocess(data_omics1, n_top_genes=3000, n_comps=50)
-    data_omics1 = data_omics1[:, data_omics1.var.highly_variable]
-
+    sc.pp.highly_variable_genes(
+    data_omics1,
+    n_top_genes=3000,
+    subset=True,
+    layer="counts",
+    flavor="seurat_v3",
+    )
+    sc.pp.pca(data_omics1, n_comps=50)
     if dataset == '4_Human_Lymph_Node':
         data_omics2 = sc.read_h5ad('Dataset/' + dataset + '/adata_ADT.h5ad')
+        sc.pp.pca(data_omics2, n_comps=30)
         data_omics2.layers["counts"] = data_omics2.X.copy()
-        data_omics2 = clr_normalize_each_cell(data_omics2)
-        sc.pp.scale(data_omics2)
-        # data_omics2 = anndata.AnnData(pca(data_omics2, n_comps=30), obs=data_omics2.obs, obsm=data_omics2.obsm)
-        # data_omics2.obsm['X_pca'] = data_omics2.X
         adata = sc.concat([data_omics1, data_omics2], axis=1, merge='same')
         adata.obs['sample'] = 'Human_lymph_node'
         data_omics1.obs['sample'] = 'Human_lymph_node'
@@ -62,8 +61,14 @@ for dataset in ['4_Human_Lymph_Node','5_Mouse_Brain']:
     elif dataset == '5_Mouse_Brain':
         data_omics2 = sc.read_h5ad('Dataset/' + dataset + '/adata_peaks_normalized.h5ad')
         data_omics2.layers["counts"] = data_omics2.X.copy()
-        # data_omics2 = anndata.AnnData(data_omics2.obsm['X_lsi'], obs=data_omics2.obs, obsm=data_omics2.obsm)
-        # data_omics2.obsm['X_lsi'] = data_omics2.X
+        sc.pp.highly_variable_genes(
+        data_omics2,
+        n_top_genes=3000,
+        subset=True,
+        layer="counts",
+        flavor="seurat_v3",
+        )
+        sc.pp.pca(data_omics2, n_comps=50)
         adata = sc.concat([data_omics1, data_omics2], axis=1, merge='same')
         adata.obs['sample'] = 'P22_mouse_brain'
         data_omics1.obs['sample'] = 'P22_mouse_brain'
@@ -74,8 +79,14 @@ for dataset in ['4_Human_Lymph_Node','5_Mouse_Brain']:
     elif dataset == '6_Mouse_Embryo':
         data_omics2 = sc.read_h5ad('Dataset/' + dataset + '/adata_peaks.h5ad')
         data_omics2.layers["counts"] = data_omics2.X.copy()
-        # data_omics2 = anndata.AnnData(data_omics2.obsm['X_lsi'], obs=data_omics2.obs, obsm=data_omics2.obsm)
-        # data_omics2.obsm['X_lsi'] = data_omics2.X
+        sc.pp.highly_variable_genes(
+        data_omics2,
+        n_top_genes=3000,
+        subset=True,
+        layer="counts",
+        flavor="seurat_v3",
+        )
+        sc.pp.pca(data_omics2, n_comps=50)
         adata = sc.concat([data_omics1, data_omics2], axis=1, merge='same')
         adata.obs['sample'] = 'mouse_embryo'
         data_omics1.obs['sample'] = 'mouse_embryo'
@@ -95,6 +106,7 @@ for dataset in ['4_Human_Lymph_Node','5_Mouse_Brain']:
         seed_everything(seed)
         print('data: {}, iteration: {}, seed {}'.format(dataset, i + 1, seed))
         if dataset == '4_Human_Lymph_Node':
+            scvi.settings.seed = seed
             model_omics1 = scvi.model.SCVI.setup_anndata(
             data_omics1,
             layer="counts",
@@ -108,8 +120,9 @@ for dataset in ['4_Human_Lymph_Node','5_Mouse_Brain']:
             n_epochs=500,
             alpha_epoch_anneal=200,
             early_stopping_kwargs=early_stopping_kwargs )
-            data_omics2.obsm['X_latent'] = model_omics2.get_latent(data_omics2.X, data_omics2.obs['sample'])
+            data_omics2.obsm['X_latent'] = model_omics2.get_latent(data_omics2.X.toarray(), data_omics2.obs['sample'])
         elif dataset == '5_Mouse_Brain' or dataset == '6_Mouse_Embryo':
+            scvi.settings.seed = seed
             model_omics1 = scvi.model.SCVI.setup_anndata(
             data_omics1,
             layer="counts",
@@ -142,23 +155,6 @@ for dataset in ['4_Human_Lymph_Node','5_Mouse_Brain']:
             random_state=seed,)
             gmm.fit(adata, use_rep='X_cellcharter')
             adata.obs['X_cellcharter'] = gmm.predict(adata, use_rep='X_cellcharter')
-            digit_labels = list(adata.obs['X_cellcharter'])
-            for i in range(len(digit_labels)):
-                if digit_labels[i] not in [0,1,2,4,5,6,7,8,11]:
-                    digit_labels[i] = 100
-            adata.obs['X_cellcharter'] = digit_labels
-            adata.obs['X_cellcharter'] = adata.obs["X_cellcharter"].astype('category')
-            adata.obs['X_cellcharter'] = adata.obs['X_cellcharter'].cat.rename_categories({0: 'CP2',
-                                                   1: 'L5',
-                                                   2: 'CP1',
-                                                   4: 'L4',
-                                                   5: 'ccg/aco',
-                                                   6: 'ACB',
-                                                   7: 'L1-L3',
-                                                    8: 'L6a/b',
-                                                   11: 'VL',
-                                                    100: '1_others'
-                                                         })
         elif dataset == '6_Mouse_Embryo':
             gmm = cc.tl.Cluster(
             n_clusters=14,

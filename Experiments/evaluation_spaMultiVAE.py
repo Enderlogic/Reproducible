@@ -17,7 +17,6 @@ from sklearn.metrics import pairwise_distances
 import matplotlib.pyplot as plt
 import anndata
 import random
-from Methods.SpaMV.utils import pca, ST_preprocess
 from Methods.SpaMV.metrics import compute_moranI, compute_jaccard, compute_supervised_scores
 
 # torch.manual_seed(42)
@@ -89,6 +88,7 @@ if __name__ == "__main__":
     parser.add_argument('--fixed_gp_params', default=False, type=bool)
     parser.add_argument('--loc_range', default=20., type=float)
     parser.add_argument('--kernel_scale', default=20., type=float)
+    parser.add_argument('--model_file', default='model.pt')
     parser.add_argument('--gene_denoised_counts_file', default='gene_denoised_counts.txt')
     parser.add_argument('--protein_denoised_counts_file', default='protein_denoised_counts.txt')
     parser.add_argument('--protein_sigmoid_file', default='protein_sigmoid.txt')
@@ -102,23 +102,16 @@ if __name__ == "__main__":
              'average','average_refined', 'jaccard 1', 'jaccard 2', 'moran I', 'moran I_refined'])
     for dataset in ['4_Human_Lymph_Node']:
         data_omics1 = sc.read_h5ad('Dataset/' + dataset + '/adata_RNA.h5ad')
-        data_omics1 = ST_preprocess(data_omics1)
-        # sc.pp.scale(data_omics1)
-        pca(data_omics1, n_comps=30)
-        # data_omics1 = anndata.AnnData(pca(data_omics1, n_comps=30 if dataset == '4_Human_Lymph_Node' else 50),
-        #                           obs=data_omics1.obs, obsm=data_omics1.obsm)
-
+        sc.pp.highly_variable_genes(
+        data_omics1,
+        n_top_genes=3000,
+        subset=True,
+        flavor="seurat_v3",
+        )
+        sc.pp.pca(data_omics1, n_comps=50)
         if dataset == '4_Human_Lymph_Node':
             data_omics2 = sc.read_h5ad('Dataset/' + dataset + '/adata_ADT.h5ad')
-            # data_omics2 = clr_normalize_each_cell(data_omics2)
-            # sc.pp.scale(data_omics2)
-            pca(data_omics2, n_comps=30)
-            # data_omics2 = anndata.AnnData(pca(data_omics2, n_comps=30), obs=data_omics2.obs, obsm=data_omics2.obsm)
-            # data_omics2.obsm['X_pca'] = data_omics2.X
-        elif dataset == '5_Mouse_Brain':
-            data_omics2 = sc.read_h5ad('../Dataset/' + dataset + '/adata_peaks_normalized.h5ad')
-            data_omics2 = anndata.AnnData(data_omics2.obsm['X_lsi'], obs=data_omics2.obs, obsm=data_omics2.obsm)
-            data_omics2.obsm['X_lsi'] = data_omics2.X
+            sc.pp.pca(data_omics2, n_comps=30)
         else:
             raise ValueError('Unknown dataset')
     loc_adata = data_omics1.obsm['spatial']
