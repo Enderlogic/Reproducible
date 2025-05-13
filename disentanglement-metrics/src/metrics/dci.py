@@ -73,6 +73,7 @@ def dci(factors, codes, continuous_factors=True, model='lasso'):
     # for c in range(nb_codes):
         # get importance weight for code c
         rho[c] = np.sum(e_matrix[:, c])
+
         if rho[c] == 0:
             disentanglement[c] = 0
             continue
@@ -81,13 +82,24 @@ def dci(factors, codes, continuous_factors=True, model='lasso'):
         prob = e_matrix[:, c] / rho[c]
         
         # compute entropy for code c
-        H = 0
+    if len(prob) == 1:
+        # 只有一个维度时，熵=0
+        H = 0.0
+    else:
+        H = 0.0
         for p in prob:
-            if p:
+            if p > 0.0:
                 H -= p * math.log(p, len(prob))
-        
-        # get disentanglement score
-        disentanglement[c] = 1 - H
+
+        disentanglement[c] = 1.0 - H
+
+    # H = 0
+    #     for p in prob:
+    #         if p:
+    #             H -= p * math.log(p, len(prob))
+    #
+    #     # get disentanglement score
+    #     disentanglement[c] = 1 - H
 
     # compute final disentanglement 
     if np.sum(rho):
@@ -107,13 +119,22 @@ def dci(factors, codes, continuous_factors=True, model='lasso'):
             prob = np.ones((len(e_matrix[f, :]), 1)) / len(e_matrix[f, :]) 
         
         # compute entropy for code c
-        H = 0
-        for p in prob:
-            if p:
-                H -= p * math.log(p, len(prob))
-        
-        # get disentanglement score
-        completeness[f] = 1 - H
+        # H = 0
+        # for p in prob:
+        #     if p:
+        #         H -= p * math.log(p, len(prob))
+        #
+        # # get disentanglement score
+        # completeness[f] = 1 - H
+        if len(prob) == 1:
+            # 只有一个维度时，熵=0
+            H = 0.0
+        else:
+            H = 0.0
+            for p in prob:
+                if p > 0.0:
+                    H -= p * math.log(p, len(prob))
+            completeness[f] = 1 - H
 
     print("\n✅ DCI Calculation Completed!")
     # average all results
